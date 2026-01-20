@@ -1,0 +1,7 @@
+{
+  "name": "Cube Perspective Tutor",
+  "description": "An interactive AI-powered art tutor specializing in teaching linear perspective, drawing cubes, and understanding 3D space.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

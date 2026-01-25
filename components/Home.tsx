@@ -1,18 +1,16 @@
 import React, { useState } from 'react';
 
 const Mascot = () => (
-  <svg viewBox="0 0 200 200" className="w-32 h-32 mx-auto drop-shadow-md filter">
-    <circle cx="100" cy="100" r="80" fill="#4F46E5" />
-    <circle cx="100" cy="90" r="60" fill="#6366F1" />
-    <ellipse cx="75" cy="85" rx="12" ry="15" fill="white" />
-    <ellipse cx="125" cy="85" rx="12" ry="15" fill="white" />
-    <circle cx="75" cy="85" r="5" fill="#1E1B4B" />
-    <circle cx="125" cy="85" r="5" fill="#1E1B4B" />
-    <circle cx="60" cy="110" r="8" fill="#F472B6" opacity="0.6" />
-    <circle cx="140" cy="110" r="8" fill="#F472B6" opacity="0.6" />
-    <path d="M 80 120 Q 100 135 120 120" stroke="white" strokeWidth="4" fill="none" strokeLinecap="round" />
-    <path d="M 50 60 Q 100 20 160 70" fill="#DC2626" /> 
-    <rect x="95" y="35" width="10" height="10" fill="#DC2626" />
+  <svg viewBox="0 0 200 200" className="w-32 h-32 mx-auto filter drop-shadow-[4px_4px_0px_rgba(45,45,45,1)]">
+    <circle cx="100" cy="100" r="80" fill="#AEC6CF" stroke="#2D2D2D" strokeWidth="3" />
+    <circle cx="100" cy="90" r="60" fill="#FFFFFF" stroke="#2D2D2D" strokeWidth="3" />
+    <ellipse cx="75" cy="85" rx="12" ry="15" fill="#2D2D2D" />
+    <ellipse cx="125" cy="85" rx="12" ry="15" fill="#2D2D2D" />
+    <circle cx="60" cy="110" r="8" fill="#FFB347" opacity="0.6" />
+    <circle cx="140" cy="110" r="8" fill="#FFB347" opacity="0.6" />
+    <path d="M 80 120 Q 100 135 120 120" stroke="#2D2D2D" strokeWidth="4" fill="none" strokeLinecap="round" />
+    <path d="M 50 60 Q 100 20 160 70" fill="#FF6961" stroke="#2D2D2D" strokeWidth="3" />
+    <rect x="95" y="35" width="10" height="10" fill="#FF6961" stroke="#2D2D2D" strokeWidth="2" />
   </svg>
 );
 
@@ -28,43 +26,42 @@ const Home: React.FC = () => {
   };
 
   return (
-    <div className="h-full overflow-y-auto bg-slate-50 pb-24">
-      <div className="bg-white p-6 pb-8 border-b border-slate-100">
-        <h1 className="text-2xl font-serif text-slate-800 text-center mb-6">My Profile</h1>
-        <div className="bg-indigo-50 rounded-full w-40 h-40 mx-auto flex items-center justify-center mb-4">
-             <Mascot />
+    <div className="h-full overflow-y-auto bg-paper pb-24 font-hand">
+      <div className="bg-paper p-6 pb-8 border-b-2 border-pencil border-dashed relative">
+        <h1 className="text-4xl font-heading text-pencil text-center mb-6 transform -rotate-1">My Profile</h1>
+        <div className="bg-paper rounded-full w-40 h-40 mx-auto flex items-center justify-center mb-4 border-2 border-pencil shadow-sketch">
+          <Mascot />
         </div>
-        <p className="text-center text-slate-500 font-medium">Level 3: Perspective Novice</p>
+        <p className="text-center text-sketch-orange font-bold text-xl uppercase tracking-widest">Level 3: Perspective Novice</p>
       </div>
 
       <div className="p-6 space-y-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-6">
-            <h2 className="text-lg font-bold text-slate-800 mb-4">Daily Goals</h2>
-            <div className="space-y-3">
-                {tasks.map(task => (
-                    <button 
-                        key={task.id}
-                        onClick={() => toggleTask(task.id)}
-                        className={`w-full text-left p-3 rounded-xl border transition-all duration-200 flex items-center gap-3 ${
-                            task.completed 
-                                ? 'bg-slate-50 border-slate-100 text-slate-400' 
-                                : 'bg-white border-slate-200 text-slate-700'
-                        }`}
-                    >
-                        <div className={`w-5 h-5 rounded border flex items-center justify-center ${
-                            task.completed ? 'bg-indigo-500 border-indigo-500' : 'border-slate-300'
-                        }`}>
-                            {task.completed && <div className="text-white text-xs">✓</div>}
-                        </div>
-                        <span className={`text-sm ${task.completed ? 'line-through' : ''}`}>{task.text}</span>
-                    </button>
-                ))}
-            </div>
+        <div className="bg-white rounded-sm shadow-sketch border-2 border-pencil p-6 relative transform rotate-1">
+          <div className="absolute -top-3 -right-3 bg-sketch-yellow border-2 border-pencil w-12 h-12 rounded-full grid place-items-center"><span className="text-2xl">⚡</span></div>
+          <h2 className="text-2xl font-heading text-pencil mb-4 border-b-2 border-pencil pb-2 inline-block">Daily Goals</h2>
+          <div className="space-y-3">
+            {tasks.map(task => (
+              <button
+                key={task.id}
+                onClick={() => toggleTask(task.id)}
+                className={`w-full text-left p-3 rounded-sm border-2 transition-all duration-200 flex items-center gap-3 ${task.completed
+                    ? 'bg-paper border-pencil/30 text-pencil/50'
+                    : 'bg-white border-pencil text-pencil hover:bg-sketch-yellow/20 hover:shadow-sm'
+                  }`}
+              >
+                <div className={`w-6 h-6 rounded-sm border-2 flex items-center justify-center ${task.completed ? 'bg-sketch-blue border-pencil' : 'border-pencil'
+                  }`}>
+                  {task.completed && <div className="text-pencil font-bold text-sm">✓</div>}
+                </div>
+                <span className={`text-lg ${task.completed ? 'line-through decoration-2 decoration-sketch-red' : ''}`}>{task.text}</span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="bg-slate-100 rounded-xl p-4 text-center">
-            <p className="text-xs text-slate-500 uppercase tracking-widest mb-1">Total XP</p>
-            <p className="text-3xl font-bold text-slate-800">1,250</p>
+        <div className="bg-paper rounded-sm p-4 text-center border-2 border-pencil border-dashed">
+          <p className="text-lg text-pencil font-bold uppercase tracking-widest mb-1">Total XP</p>
+          <p className="text-5xl font-heading text-sketch-orange drop-shadow-[2px_2px_0px_#2D2D2D]">1,250</p>
         </div>
       </div>
     </div>

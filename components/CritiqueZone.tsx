@@ -423,11 +423,11 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         {triggerCapture ? (
           <meshBasicMaterial color="#ffffff" />
         ) : (
-          <meshStandardMaterial color="#4f46e5" roughness={0.5} metalness={0.1} />
+          <meshStandardMaterial color="#ffffff" roughness={0.9} metalness={0.1} />
         )}
         <lineSegments>
           <edgesGeometry args={[edgeGeometry]} />
-          <lineBasicMaterial color={triggerCapture ? "#000000" : "white"} linewidth={triggerCapture ? 2 : 2} />
+          <lineBasicMaterial color="#2D2D2D" linewidth={2} />
         </lineSegments>
       </mesh>
 
@@ -521,7 +521,7 @@ const CritiqueZone: React.FC = () => {
 
   if (step === 'pose') {
     return (
-      <div className="h-full flex flex-col bg-slate-100 relative">
+      <div className="h-full flex flex-col bg-paper relative">
         <div className="flex-1 w-full relative">
           <Canvas gl={{ preserveDrawingBuffer: true }}>
             <Suspense fallback={null}>
@@ -541,14 +541,14 @@ const CritiqueZone: React.FC = () => {
           </Canvas>
 
           <div className="absolute top-4 left-4 right-4 flex flex-col items-center pointer-events-none gap-4">
-            <div className="bg-white/90 backdrop-blur shadow-sm rounded-lg p-1 flex gap-1 pointer-events-auto">
+            <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg p-2 flex gap-2 pointer-events-auto border-2 border-pencil">
               {['1pt', '2pt', 'free'].map((mode) => (
                 <button
                   key={mode}
                   onClick={() => handlePresetChange(mode)}
-                  className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-colors ${preset === mode
-                    ? 'bg-indigo-600 text-white shadow-sm'
-                    : 'text-slate-500 hover:bg-slate-100'
+                  className={`px-4 py-1.5 rounded-md text-sm font-bold uppercase tracking-wider transition-all border-2 border-transparent ${preset === mode
+                    ? 'bg-sketch-orange text-pencil border-pencil shadow-sm transform -rotate-1'
+                    : 'text-pencil hover:bg-sketch-yellow hover:border-pencil hover:-rotate-1'
                     }`}
                 >
                   {mode === 'free' ? 'Free' : mode.replace('pt', '-Point')}
@@ -556,30 +556,30 @@ const CritiqueZone: React.FC = () => {
               ))}
             </div>
 
-            <div className="bg-white/90 backdrop-blur shadow-sm rounded-lg px-4 py-2 flex items-center gap-4 pointer-events-auto flex-wrap justify-center">
+            <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg px-4 py-2 flex items-center gap-4 pointer-events-auto flex-wrap justify-center border-2 border-pencil mt-2">
               {(preset === '1pt' || preset === '2pt') && (
                 <>
-                  <div className="flex items-center gap-1 pr-4 border-r border-slate-200">
+                  <div className="flex items-center gap-1 pr-4 border-r-2 border-pencil">
                     <button
                       onClick={resetAngle}
-                      className="p-1.5 rounded hover:bg-slate-100 text-slate-600 active:scale-95 transition-transform"
+                      className="p-1.5 rounded hover:bg-sketch-yellow border-2 border-transparent hover:border-pencil transition-all text-pencil transform active:scale-95"
                       title="Reset View"
                     >
                       <Icons.ResetSquare />
                     </button>
                   </div>
 
-                  <div className="flex items-center gap-1 pr-4 border-r border-slate-200">
+                  <div className="flex items-center gap-1 pr-4 border-r-2 border-pencil">
                     <button
                       onClick={() => setInteractionMode('move')}
-                      className={`p-1.5 rounded transition-all ${interactionMode === 'move' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-400'}`}
+                      className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'move' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`}
                       title="Move Mode"
                     >
                       <Icons.Move />
                     </button>
                     <button
                       onClick={() => setInteractionMode('rotate')}
-                      className={`p-1.5 rounded transition-all ${interactionMode === 'rotate' ? 'bg-indigo-100 text-indigo-600' : 'hover:bg-slate-100 text-slate-400'}`}
+                      className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'rotate' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`}
                       title="Rotate Mode"
                     >
                       <Icons.RefreshCw />
@@ -589,53 +589,53 @@ const CritiqueZone: React.FC = () => {
               )}
 
               {preset === 'free' && (
-                <div className="pr-4 border-r border-slate-200">
-                  <span className="text-xs font-bold text-slate-500 uppercase">Orbit Camera</span>
+                <div className="pr-4 border-r-2 border-pencil">
+                  <span className="text-sm font-bold text-pencil font-hand">Orbit Camera</span>
                 </div>
               )}
 
-              <div className="flex items-center gap-2 pr-4 border-r border-slate-200">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Dist</span>
+              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
+                <span className="text-sm font-bold text-pencil font-hand">Dist</span>
                 <input
                   type="range"
                   min="5"
                   max="50"
                   value={cameraDistance}
                   onChange={(e) => setCameraDistance(Number(e.target.value))}
-                  className="w-16 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
                 />
               </div>
 
-              <div className="flex items-center gap-2 pr-4 border-r border-slate-200">
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Lens</span>
+              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
+                <span className="text-sm font-bold text-pencil font-hand">Lens</span>
                 <input
                   type="range"
                   min="15"
                   max="100"
                   value={fov}
                   onChange={(e) => setFov(Number(e.target.value))}
-                  className="w-16 h-1 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
                 />
               </div>
 
               {(preset === '1pt' || preset === '2pt') && (
-                <div className="pl-4">
+                <div className="pl-2">
                   <button
                     onClick={() => setShowGuides(!showGuides)}
-                    className={`text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-md border transition-colors ${showGuides
-                      ? 'bg-red-50 text-red-600 border-red-200'
-                      : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                    className={`text-sm font-bold font-hand px-3 py-1 rounded-md border-2 transition-all ${showGuides
+                      ? 'bg-sketch-red text-pencil border-pencil shadow-sm'
+                      : 'bg-paper text-pencil border-dashed border-pencil hover:bg-sketch-yellow'
                       }`}
                   >
-                    {showGuides ? 'Hide' : 'Show'}
+                    {showGuides ? 'Hide Guides' : 'Show Guides'}
                   </button>
                 </div>
               )}
             </div>
           </div>
 
-          <div className="absolute bottom-20 w-full text-center pointer-events-none">
-            <span className="bg-black/30 backdrop-blur-md px-3 py-1 rounded-full text-[10px] text-white/90 font-medium">
+          <div className="absolute bottom-24 w-full text-center pointer-events-none">
+            <span className="bg-pencil text-paper px-4 py-2 transform -rotate-2 inline-block shadow-sketch rounded-sm text-sm font-hand">
               {preset === 'free'
                 ? 'Drag to orbit • Pinch to zoom'
                 : interactionMode === 'move'
@@ -646,10 +646,10 @@ const CritiqueZone: React.FC = () => {
           </div>
         </div>
 
-        <div className="p-6 bg-white border-t border-slate-200 z-10">
+        <div className="p-6 bg-paper border-t-2 border-pencil z-10 flex justify-center">
           <button
             onClick={triggerSceneCapture}
-            className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-lg shadow-indigo-200 hover:bg-indigo-700 active:scale-95 transition-all flex items-center justify-center gap-2"
+            className="w-full max-w-md bg-sketch-blue text-pencil py-4 rounded-xl font-bold text-xl shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 transition-all flex items-center justify-center gap-2 border-2 border-pencil"
           >
             <Icons.Camera />
             Capture & Draw
@@ -662,31 +662,33 @@ const CritiqueZone: React.FC = () => {
   // ... rest of the component matches previous version logic (draw step, result step, etc)
   if (step === 'draw') {
     return (
-      <div className="h-full flex flex-col bg-slate-50 p-4 md:p-6 overflow-y-auto">
+      <div className="h-full flex flex-col bg-paper p-4 md:p-6 overflow-y-auto">
         <div className="max-w-md mx-auto w-full space-y-6">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-serif text-slate-800">Your Reference</h2>
-            <button onClick={resetFlow} className="text-sm text-slate-400 hover:text-indigo-600">Cancel</button>
+          <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
+            <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Your Reference</h2>
+            <button onClick={resetFlow} className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline">Cancel</button>
           </div>
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-            <img src={referenceImage!} alt="Reference" className="w-full aspect-[4/3] object-contain bg-slate-50 rounded-lg" />
+          <div className="bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil transform rotate-1">
+            <div className="bg-white border-2 border-pencil/10">
+              <img src={referenceImage!} alt="Reference" className="w-full aspect-[4/3] object-contain" />
+            </div>
           </div>
           <div className="space-y-4">
             <div
               onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative overflow-hidden h-48 ${userDrawing ? 'border-indigo-500 bg-indigo-50' : 'border-slate-300 hover:border-indigo-400 bg-white'}`}
+              className={`border-4 border-dashed rounded-lg p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative overflow-hidden h-48 ${userDrawing ? 'border-sketch-blue bg-sketch-blue/10' : 'border-pencil/30 hover:border-pencil hover:bg-sketch-yellow/20'}`}
             >
               {userDrawing ? (
                 <img src={userDrawing} className="absolute inset-0 w-full h-full object-contain p-2" alt="upload" />
               ) : (
                 <>
-                  <div className="text-slate-400 mb-2"><Icons.Upload /></div>
-                  <p className="text-slate-600 font-medium">Tap to upload your drawing</p>
+                  <div className="text-pencil mb-2"><Icons.Upload /></div>
+                  <p className="text-pencil font-hand text-xl">Tap to paste your sketch</p>
                 </>
               )}
             </div>
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-            <button onClick={runComparison} disabled={!userDrawing} className="w-full bg-indigo-600 text-white py-4 rounded-xl font-bold text-lg shadow-md hover:bg-indigo-700 disabled:opacity-50 disabled:shadow-none transition-all">Check Accuracy</button>
+            <button onClick={runComparison} disabled={!userDrawing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all">Check Accuracy</button>
           </div>
         </div>
       </div>
@@ -694,31 +696,36 @@ const CritiqueZone: React.FC = () => {
   }
 
   return (
-    <div className="h-full bg-slate-50 p-4 md:p-6 overflow-y-auto">
+    <div className="h-full bg-paper p-4 md:p-6 overflow-y-auto">
       <div className="max-w-md mx-auto w-full space-y-6">
-        <div className="flex justify-between items-center">
-          <h2 className="text-xl font-serif text-slate-800">Accuracy Report</h2>
-          <button onClick={resetFlow} className="text-indigo-600 font-medium">New Practice</button>
+        <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
+          <h2 className="text-3xl font-heading text-pencil">Accuracy Report</h2>
+          <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline">New Practice</button>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-white p-2 rounded-lg border border-slate-200">
-            <p className="text-[10px] text-slate-400 mb-1 uppercase tracking-wide">Model</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform -rotate-1">
+            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">Model</p>
             <img src={referenceImage!} className="w-full h-24 object-contain" alt="ref" />
           </div>
-          <div className="bg-white p-2 rounded-lg border border-slate-200">
-            <p className="text-[10px] text-slate-400 mb-1 uppercase tracking-wide">You</p>
+          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform rotate-1">
+            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">You</p>
             <img src={userDrawing!} className="w-full h-24 object-contain" alt="user" />
           </div>
         </div>
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 min-h-[300px]">
-          {isAnalyzing ? (
-            <div className="flex flex-col items-center justify-center h-48 gap-4 text-slate-400">
-              <div className="animate-spin text-indigo-600"><Icons.Loader /></div>
-              <p className="font-serif italic">Analyzing geometry...</p>
-            </div>
-          ) : (
-            <MarkdownRenderer content={analysis || "No analysis available."} />
-          )}
+        <div className="bg-paper rounded-sm shadow-sketch border-2 border-pencil p-6 min-h-[300px] relative">
+          <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-sketch-yellow border-2 border-pencil z-0"></div>
+          <div className="absolute -bottom-3 -right-3 w-12 h-12 rounded-full bg-sketch-blue border-2 border-pencil z-0"></div>
+
+          <div className="relative z-10">
+            {isAnalyzing ? (
+              <div className="flex flex-col items-center justify-center h-48 gap-4 text-pencil">
+                <div className="animate-spin text-sketch-orange"><Icons.Loader /></div>
+                <p className="font-hand text-xl animate-pulse">Analyzing lines & angles...</p>
+              </div>
+            ) : (
+              <MarkdownRenderer content={analysis || "No analysis available."} className="font-hand text-lg" />
+            )}
+          </div>
         </div>
       </div>
     </div>

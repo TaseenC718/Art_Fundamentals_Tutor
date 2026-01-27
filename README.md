@@ -23,22 +23,18 @@ Art Coach is a **turn-based visual tutor** — think chess, not video chat. The 
 ```
 src/
 ├── components/
-│   ├── DrawingCoach.tsx    # Main orchestrator - wires state, canvas, and AI
-│   ├── ImageCapture.tsx    # Camera capture + file upload
-│   ├── CanvasOverlay.tsx   # Layered canvas rendering system
-│   ├── StepIndicator.tsx   # Progress bar (3 steps)
-│   └── InstructionPanel.tsx # Feedback display + action buttons
-├── hooks/
-│   ├── useDrawingState.ts  # State machine (useReducer)
-│   ├── useGeminiAnalysis.ts # TanStack Query mutation
-│   ├── useCamera.ts        # MediaDevices API wrapper
-│   └── useLineAnimation.ts # requestAnimationFrame animations
+│   ├── CritiqueZone.tsx    # Main interaction area (3D scene + feedback)
+│   ├── ChatInterface.tsx   # Chat handling
+│   ├── Home.tsx            # Home/Profile view
+│   ├── LessonHub.tsx       # Lesson navigation
+│   ├── Progress.tsx        # Progress tracking
+│   ├── Icon.tsx            # Application icons
+│   └── MarkdownRenderer.tsx # AI feedback renderer
 ├── services/
-│   └── gemini.ts           # Gemini Vision client + prompts + response parsing
-├── types/
-│   └── index.ts            # TypeScript definitions
-└── utils/
-    └── canvas.ts           # Drawing helpers + coordinate conversion
+│   └── geminiService.ts    # AI service integration
+├── App.tsx                 # Main layout and routing
+├── index.tsx               # Entry point
+└── types.ts                # TypeScript definitions
 ```
 
 ### Key Design Decisions
@@ -46,10 +42,7 @@ src/
 #### 1. State Machine with `useReducer`
 All state transitions are explicit and typed. The app progresses through states:
 ```
-idle → capturing → analyzing → showing_feedback → animating_guide → awaiting_redraw → [next step or completed]
-```
 
-#### 2. Normalized Coordinates (0-1)
 Gemini returns coordinates normalized to 0-1. This decouples AI output from canvas dimensions:
 ```typescript
 // Gemini returns: { x: 0.5, y: 0.3 }

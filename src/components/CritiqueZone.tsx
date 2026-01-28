@@ -1,228 +1,77 @@
-import * as THREE from 'three';
-import React, { useState, useRef, useEffect, Suspense, useMemo } from 'react';
+import React, { useState, useRef, Suspense, useEffect, useMemo } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, Environment } from '@react-three/drei';
-import { compareDrawings } from '../services/geminiService';
+import { OrbitControls, Environment, useHelper } from '@react-three/drei';
+import * as THREE from 'three';
+import * as Icons from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
-import { Icons } from './Icon';
+import { compareDrawings } from '../services/geminiService';
 
-// --- 3D Components ---
+// --- Helper Functions for VP Calculation ---
+const HORIZON_Z = -100; // Far distance for horizon line
 
-const EYE_Z_INITIAL = 15;
-const HORIZON_Z = -30;
+// Calculate VP position on the horizon plane (Z = -100)
+// This finds the world-space coordinate where a parallel line extending from the camera intersects the horizon plane.
+const getVanishingPoint = (camera: THREE.Camera, rotation: number, axis: 'x' | 'z'): THREE.Vector3 | null => {
+  const dir = new THREE.Vector3(axis === 'x' ? 1 : 0, 0, axis === 'z' ? 1 : 0);
+  dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation);
 
-/**
- * Calculates VP X-coordinate on the plane Z = HORIZON_Z
- * based on the current camera Z position.
- */
-const calculateVPPosition = (cameraZ: number, rotationRad: number, type: 'center' | 'left' | 'right') => {
-  const D = cameraZ - HORIZON_Z;
-  const theta = rotationRad;
+  // We want the direction that points 'into' the screen (away from camera Z)
+  // Camera is at +Z, looking towards -Z.
+  // So we want the component with negative Z.
+  if (dir.z > 0) dir.negate();
 
-  if (type === 'center' || type === 'left') {
-    // Corresponds to depth axis (-sin, 0, -cos)
-    // x = -D * tan(theta)
-    return -D * Math.tan(theta);
-  } else {
-    // Right VP for 2pt (width axis)
-    // Corresponds to width axis (cos, 0, -sin)
-    // x = D * cot(theta)
-    // Avoid infinity
-    const eps = 0.0001;
-    const t = Math.abs(theta) < eps ? eps : theta;
-    return D * (1 / Math.tan(t));
-  }
+  // If parallel to horizon plane (horizontal), VP is at infinity (no intersection)
+  if (Math.abs(dir.z) < 0.001) return null;
+
+  const t = (HORIZON_Z - camera.position.z) / dir.z;
+
+  // Intersection point
+  const x = camera.position.x + dir.x * t;
+  const y = camera.position.y + dir.y * t;
+
+  return new THREE.Vector3(x, y, HORIZON_Z);
 };
 
-// Dynamic Markers Component
-const PerspectiveMarkers = ({ preset, totalRotation, visible = true }: { preset: string, totalRotation: number, visible?: boolean }) => {
-  const { camera } = useThree();
-  const centerRef = useRef<THREE.Mesh>(null);
-  const leftRef = useRef<THREE.Mesh>(null);
-  const rightRef = useRef<THREE.Mesh>(null);
-  const lineRef = useRef<THREE.Line>(null);
 
-  useFrame(() => {
-    const camZ = camera.position.z;
+interface CameraControllerProps {
+  fov: number;
+  preset: string;
+  distance: number;
+  height: number;
+}
 
-    // Horizon Line is at Y=0 (Eye Level)
-    if (lineRef.current) {
-      lineRef.current.position.y = 0;
-    }
-
-    if (preset === '1pt') {
-      if (centerRef.current) {
-        const x = calculateVPPosition(camZ, totalRotation, 'center');
-        centerRef.current.position.set(x, 0, HORIZON_Z);
-        centerRef.current.visible = Math.abs(x) < 5000;
-      }
-    } else if (preset === '2pt') {
-      if (leftRef.current) {
-        const x = calculateVPPosition(camZ, totalRotation, 'left');
-        leftRef.current.position.set(x, 0, HORIZON_Z);
-        leftRef.current.visible = Math.abs(x) < 5000;
-      }
-      if (rightRef.current) {
-        const x = calculateVPPosition(camZ, totalRotation, 'right');
-        rightRef.current.position.set(x, 0, HORIZON_Z);
-        rightRef.current.visible = Math.abs(x) < 5000;
-      }
-    }
-  });
-
-  if (!visible || preset === 'free') return null;
-
-  return (
-    <group>
-      {/* The Horizon Line */}
-      <line ref={lineRef as any}>
-        <bufferGeometry>
-          <float32BufferAttribute
-            attach="attributes-position"
-            args={[new Float32Array([-5000, 0, HORIZON_Z, 5000, 0, HORIZON_Z]), 3]}
-          />
-        </bufferGeometry>
-        <lineBasicMaterial color="#94a3b8" linewidth={1} />
-      </line>
-
-      {preset === '1pt' && (
-        <mesh ref={centerRef}>
-          <sphereGeometry args={[0.4, 16, 16]} />
-          <meshBasicMaterial color="#ef4444" />
-        </mesh>
-      )}
-
-      {preset === '2pt' && (
-        <>
-          <mesh ref={leftRef}>
-            <sphereGeometry args={[0.4, 16, 16]} />
-            <meshBasicMaterial color="#ef4444" />
-          </mesh>
-          <mesh ref={rightRef}>
-            <sphereGeometry args={[0.4, 16, 16]} />
-            <meshBasicMaterial color="#ef4444" />
-          </mesh>
-        </>
-      )}
-    </group>
-  );
-};
-
-// Perspective Guides Component
-const PerspectiveGuides = ({ enabled, preset, cubePos, totalRotation }: { enabled: boolean, preset: string, cubePos: [number, number, number], totalRotation: number }) => {
-  const ref = useRef<THREE.LineSegments>(null);
-  const { camera } = useThree();
-
-  useFrame(() => {
-    if (!ref.current) return;
-
-    if (!enabled || (preset !== '1pt' && preset !== '2pt')) {
-      ref.current.visible = false;
-      return;
-    }
-    ref.current.visible = true;
-
-    const positions: number[] = [];
-    const currentPos = new THREE.Vector3(...cubePos);
-    const s = 1.25; // Cube half-size
-    const camZ = camera.position.z;
-
-    // Calculate actual 3D positions of Vanishing Points on the Horizon Plane (Y=0)
-    let vp1: THREE.Vector3 | null = null; // Center or Left
-    let vp2: THREE.Vector3 | null = null; // Right
-
-    if (preset === '1pt') {
-      const x = calculateVPPosition(camZ, totalRotation, 'center');
-      vp1 = new THREE.Vector3(x, 0, HORIZON_Z);
-    } else if (preset === '2pt') {
-      const xLeft = calculateVPPosition(camZ, totalRotation, 'left');
-      vp1 = new THREE.Vector3(xLeft, 0, HORIZON_Z);
-
-      const xRight = calculateVPPosition(camZ, totalRotation, 'right');
-      vp2 = new THREE.Vector3(xRight, 0, HORIZON_Z);
-    }
-
-    // Define all 8 corners in local space
-    const corners = [];
-    for (let x = -1; x <= 1; x += 2) {
-      for (let y = -1; y <= 1; y += 2) {
-        for (let z = -1; z <= 1; z += 2) {
-          corners.push(new THREE.Vector3(x * s, y * s, z * s));
-        }
-      }
-    }
-
-    corners.forEach(c => {
-      // Transform corner to world space
-      // Standard rotation around Y
-      const worldCorner = c.clone()
-        .applyAxisAngle(new THREE.Vector3(0, 1, 0), totalRotation)
-        .add(currentPos);
-
-      if (vp1) {
-        positions.push(worldCorner.x, worldCorner.y, worldCorner.z);
-        positions.push(vp1.x, vp1.y, vp1.z);
-      }
-      if (vp2) {
-        positions.push(worldCorner.x, worldCorner.y, worldCorner.z);
-        positions.push(vp2.x, vp2.y, vp2.z);
-      }
-    });
-
-    const geo = ref.current.geometry;
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geo.computeBoundingSphere();
-    ref.current.computeLineDistances();
-  });
-
-  if (!enabled || (preset !== '1pt' && preset !== '2pt')) return null;
-
-  return (
-    <lineSegments ref={ref}>
-      <bufferGeometry />
-      <lineDashedMaterial color="#ef4444" opacity={0.3} transparent dashSize={0.5} gapSize={0.5} />
-    </lineSegments>
-  );
-};
-
-// Camera Controller
-const CameraController = ({
-  fov,
-  preset,
-  distance
-}: {
-  fov: number,
-  preset: string,
-  distance: number
-}) => {
+const CameraController = ({ fov, preset, distance, height }: CameraControllerProps) => {
   const { camera } = useThree();
   const controlsRef = useRef<any>(null);
+  const [isLocked, setIsLocked] = useState(true);
 
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
       camera.fov = fov;
+      camera.far = 10000; // Extend far plane to see the horizon
       camera.updateProjectionMatrix();
     }
   }, [fov, camera]);
 
   useEffect(() => {
-    if (preset === '1pt' || preset === '2pt') {
-      // Camera at height 0 (Horizon Level)
-      camera.position.set(0, 0, distance);
-      camera.lookAt(0, 0, 0); // Always look at the cube
-      if (controlsRef.current) {
-        controlsRef.current.target.set(0, 0, 0);
-      }
-    } else if (preset === 'free') {
-      // Free mode orbit
-    }
+    if (preset === 'free') {
+      setIsLocked(false);
+      // Reset to a reasonable free-look angle
+      camera.position.set(10, 10, 10);
+      camera.lookAt(0, 0, 0);
+    } else {
+      setIsLocked(true);
+      // Fixed frontal view for 1pt/2pt (simulating "looking straight at horizon")
+      // We raise slightly (y=2) to see the top face
+      camera.position.set(0, height, distance);
+      camera.lookAt(0, 0, 0);
+      camera.rotation.set(0, 0, 0); // Force strictly forward-facing for 1pt/2pt alignment
 
-    if (controlsRef.current) {
-      controlsRef.current.update();
+      // Manual lookAt adjustment if needed, but atomic set is safer
+      // Re-orient to ensure horizon is flat
+      camera.lookAt(0, 0, 0);
     }
-  }, [preset, camera, distance]);
-
-  const isLocked = preset === '1pt' || preset === '2pt';
+  }, [preset, distance, camera, height]);
 
   return (
     <OrbitControls
@@ -236,8 +85,223 @@ const CameraController = ({
   );
 };
 
+// --- Horizon Helper Component ---
+const HorizonHelper = ({ camera }: { camera: THREE.Camera }) => {
+  const lineRef = useRef<THREE.Line>(null);
+
+  // Use a very wide line to simulate infinite horizon
+  const points = useMemo(() => [
+    new THREE.Vector3(-10000, 0, 0),
+    new THREE.Vector3(10000, 0, 0)
+  ], []);
+
+  const geometry = useMemo(() => new THREE.BufferGeometry().setFromPoints(points), [points]);
+
+  useFrame(() => {
+    if (lineRef.current) {
+      // The horizon line is always at the specific distance (HORIZON_Z)
+      // and at the height of the camera (Eye Level).
+      // We also center it on the camera's X so it spans the view.
+      lineRef.current.position.set(camera.position.x, camera.position.y, HORIZON_Z);
+    }
+  });
+
+  return (
+    <line ref={lineRef as any}>
+      <primitive object={geometry} attach="geometry" />
+      <lineBasicMaterial color="red" opacity={0.5} transparent />
+    </line>
+  );
+};
+
+interface VPHelpersProps {
+  camera: THREE.Camera;
+  rotation: number;
+  cubePos: [number, number, number];
+  preset: string;
+}
+
+
+
+const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
+  const meshRef1 = useRef<THREE.Mesh>(null);
+  const meshRef2 = useRef<THREE.Mesh>(null);
+  const lineRef1 = useRef<THREE.LineSegments>(null);
+  const lineRef2 = useRef<THREE.LineSegments>(null);
+
+  useFrame(() => {
+    const vpX = getVanishingPoint(camera, rotation, 'x');
+    const vpZ = getVanishingPoint(camera, rotation, 'z');
+
+    // Calculate world corners
+    const halfSize = 1.25;
+    const corners = [];
+    for (let x of [-1, 1]) {
+      for (let y of [-1, 1]) {
+        for (let z of [-1, 1]) {
+          const v = new THREE.Vector3(x * halfSize, y * halfSize, z * halfSize);
+          v.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation);
+          v.add(new THREE.Vector3(...cubePos));
+          corners.push(v);
+        }
+      }
+    }
+    // Logic: In 1pt, we see the front face (4 corners). We want lines from these 4 corners to VP.
+    // That makes 4 lines.
+
+    const updateLines = (vp: THREE.Vector3, lineRef: React.RefObject<THREE.LineSegments>, color: string) => {
+      if (!lineRef.current) return;
+
+      lineRef.current.visible = true;
+      const positions = lineRef.current.geometry.attributes.position;
+
+      // We want 4 lines. 
+      // Which 4 corners? 
+      // Let's picking the 4 "top/bottom left/right" relative to the view is hard.
+      // Let's just draw from 4 specific corners. 
+      // For VP-Z (Depth), we want lines extending from the front face (min-Z?)
+      // But rotation makes "front" relative.
+      // 
+      // Improved visual: Draw from ALL 8 corners? User might find 8 lines cluttered.
+      // But user specifically said "four vanishing point lines".
+      // This likely refers to the 4 edges converging.
+      // Let's try drawing all 8 for a moment, or better, calculate the 4 'outer' ones? Hard.
+      // 
+      // Let's try drawing from the 4 corners that are 'furthest' from VP? Or closest?
+      // Let's just draw from the 4 corners of the +/- X/Y face.
+      // 
+      // Actually, for Z-VP, the 4 edges are formed by:
+      // (-1,-1,z), (1,-1,z), (-1,1,z), (1,1,z)
+      // We can just pick one end of each edge? 
+      // Let's pick the end 'closest' to the camera?
+      // Or just draw from both? No 8 lines.
+      // 
+      // Let's draw from the point `p` such that the vector `p -> VP` doesn't pass through the other point?
+      // i.e. The point further from VP?
+      // Actually, if we draw from the point FURTHEST from VP, the line goes through the cube (along the edge) to the VP.
+      // This effectively highlights the edge AND the extension. This is usually desired.
+
+      let idx = 0;
+
+      // For Z-VP: Iterate the 4 X/Y combinations
+      // (-hs, -hs), (hs, -hs), (-hs, hs), (hs, hs)
+
+      const sets = [
+        [-halfSize, -halfSize],
+        [halfSize, -halfSize],
+        [-halfSize, halfSize],
+        [halfSize, halfSize]
+      ];
+
+      sets.forEach(([c1, c2]) => {
+        // For Z-VP: c1=x, c2=y. Z varies.
+        // We have two endpoints for this edge: at local Z = -hs and Z = hs.
+        // We want to draw from *one* of them to the VP.
+        // Actually, drawing from the one visually 'closest' to avoiding passing through the cube?
+        // Or just draw from both? No 8 lines.
+        // 
+        // Let's draw from the point `p` such that the vector `p -> VP` doesn't pass through the other point?
+        // i.e. The point further from VP?
+        // Actually, if we draw from the point FURTHEST from VP, the line goes through the cube (along the edge) to the VP.
+        // This effectively highlights the edge AND the extension. This is usually desired.
+
+        let pFar = new THREE.Vector3(0, 0, 0);
+        let pNear = new THREE.Vector3(0, 0, 0);
+        let maxDist = -1;
+
+        // Check both ends of the edge
+        [-halfSize, halfSize].forEach(v3 => {
+          let localPos = new THREE.Vector3(0, 0, 0);
+          if (color === 'orange') { // Z-VP
+            localPos.set(c1, c2, v3);
+          } else { // X-VP (Cyan) -> c1=z, c2=y. X varies.
+            localPos.set(v3, c2, c1);
+          }
+
+          localPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation);
+          localPos.add(new THREE.Vector3(...cubePos));
+
+          const d = localPos.distanceTo(vp);
+          if (d > maxDist) {
+            maxDist = d;
+            pFar.copy(localPos);
+          }
+        });
+
+        positions.setXYZ(idx++, pFar.x, pFar.y, pFar.z);
+        positions.setXYZ(idx++, vp.x, vp.y, vp.z);
+      });
+
+      positions.needsUpdate = true;
+    };
+
+
+    // --- Update VP 1 (Cyan / X-axis) ---
+    // Only visible in 2pt
+    if (meshRef1.current && lineRef1.current) {
+      if (preset === '2pt' && vpX) {
+        meshRef1.current.visible = true;
+        meshRef1.current.position.copy(vpX);
+        updateLines(vpX, lineRef1, 'cyan');
+      } else {
+        meshRef1.current.visible = false;
+        lineRef1.current.visible = false;
+      }
+    }
+
+    // --- Update VP 2 (Orange / Z-axis) ---
+    // Visible in 1pt (Center) and 2pt (Right side usually)
+    if (meshRef2.current && lineRef2.current) {
+      if (vpZ) {
+        meshRef2.current.visible = true;
+        meshRef2.current.position.copy(vpZ);
+        updateLines(vpZ, lineRef2, 'orange');
+      } else {
+        meshRef2.current.visible = false;
+        lineRef2.current.visible = false;
+      }
+    }
+  });
+
+  return (
+    <>
+      <mesh ref={meshRef1}>
+        <sphereGeometry args={[1]} />
+        <meshBasicMaterial color="cyan" />
+      </mesh>
+      <lineSegments ref={lineRef1 as any}>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            count={8}
+            array={new Float32Array(24)}
+            itemSize={3}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color="cyan" opacity={0.5} transparent />
+      </lineSegments>
+
+      <mesh ref={meshRef2}>
+        <sphereGeometry args={[1]} />
+        <meshBasicMaterial color="orange" />
+      </mesh>
+      <lineSegments ref={lineRef2 as any}>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            count={8}
+            array={new Float32Array(24)}
+            itemSize={3}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color="orange" opacity={0.5} transparent />
+      </lineSegments>
+    </>
+  );
+};
+
 interface SceneContentProps {
-  onCapture: (data: string) => void;
+  onCapture: (data: string, lines: string, meta?: any) => void;
   triggerCapture: boolean;
   showGuides: boolean;
   preset: string;
@@ -253,8 +317,12 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
   const isDragging = useRef(false);
   const startX = useRef(0);
   const startRotation = useRef(0);
+  const dragOffset = useRef(new THREE.Vector3());
+  const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), []);
 
   const edgeGeometry = useMemo(() => new THREE.BoxGeometry(2.5, 2.5, 2.5), []);
+  const cubeMaterial = useRef<THREE.MeshStandardMaterial>(null);
+  const cubeMesh = useRef<THREE.Mesh>(null);
 
   // When capturing, we want a clean shot of the cube without guides
   const areHelpersVisible = !triggerCapture;
@@ -265,10 +333,21 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         background: scene.background
       };
 
+      // --- 1. Solid Render (Reference) ---
       // Force white background for "paper" look
       scene.background = new THREE.Color('#ffffff');
-
       gl.render(scene, camera);
+
+      // Helper for cropping
+      const getCroppedImage = (minX: number, minY: number, width: number, height: number) => {
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = width;
+        tempCanvas.height = height;
+        const ctx = tempCanvas.getContext('2d');
+        if (!ctx) return null;
+        ctx.drawImage(gl.domElement, minX, minY, width, height, 0, 0, width, height);
+        return tempCanvas.toDataURL('image/png');
+      };
 
       // Calculate Cube Bounding Box in Screen Space
       const width = gl.domElement.width;
@@ -280,35 +359,80 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
       let minY = height;
       let maxY = 0;
 
-      // Check all 8 corners
-      for (let x of [-1, 1]) {
-        for (let y of [-1, 1]) {
-          for (let z of [-1, 1]) {
-            const cornerPos = new THREE.Vector3(x * halfSize, y * halfSize, z * halfSize);
-            // Apply rotation
-            cornerPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), cubeRotation);
-            // Translate
-            cornerPos.add(new THREE.Vector3(...cubePos));
+      const edgesX: [number, number, number, number][] = [];
+      const edgesZ: [number, number, number, number][] = [];
 
-            // Project to Screen
-            cornerPos.project(camera);
+      const projectVec = (v: THREE.Vector3) => {
+        const vec = v.clone();
+        vec.project(camera);
+        const px = (vec.x + 1) / 2 * width;
+        const py = -(vec.y - 1) / 2 * height;
+        return [px, py];
+      };
 
-            // Convert NDC to Pixel Coordinates
-            // NDC: [-1, 1], Y is up
-            // Screen: [0, width/height], Y is down
-            const px = (cornerPos.x + 1) / 2 * width;
-            const py = -(cornerPos.y - 1) / 2 * height;
+      // Define edges (start corner -> end corner)
+      // Cube is +/- halfSize
+      const hs = halfSize;
 
-            minX = Math.min(minX, px);
-            maxX = Math.max(maxX, px);
-            minY = Math.min(minY, py);
-            maxY = Math.max(maxY, py);
-          }
-        }
-      }
+      // X-Edges (Parallel to X axis)
+      const xSegments = [
+        [new THREE.Vector3(-hs, -hs, -hs), new THREE.Vector3(hs, -hs, -hs)],
+        [new THREE.Vector3(-hs, hs, -hs), new THREE.Vector3(hs, hs, -hs)],
+        [new THREE.Vector3(-hs, -hs, hs), new THREE.Vector3(hs, -hs, hs)],
+        [new THREE.Vector3(-hs, hs, hs), new THREE.Vector3(hs, hs, hs)],
+      ];
+
+      // Z-Edges (Parallel to Z axis)
+      const zSegments = [
+        [new THREE.Vector3(-hs, -hs, -hs), new THREE.Vector3(-hs, -hs, hs)],
+        [new THREE.Vector3(hs, -hs, -hs), new THREE.Vector3(hs, -hs, hs)],
+        [new THREE.Vector3(-hs, hs, -hs), new THREE.Vector3(-hs, hs, hs)],
+        [new THREE.Vector3(hs, hs, -hs), new THREE.Vector3(hs, hs, hs)],
+      ];
+
+      const processEdges = (segments: THREE.Vector3[][], output: [number, number, number, number][]) => {
+        segments.forEach(seg => {
+          const start = seg[0].clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cubeRotation).add(new THREE.Vector3(...cubePos));
+          const end = seg[1].clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cubeRotation).add(new THREE.Vector3(...cubePos));
+
+          const [x1, y1] = projectVec(start);
+          const [x2, y2] = projectVec(end);
+          output.push([x1, y1, x2, y2]);
+
+          // Update Bounds
+          minX = Math.min(minX, x1, x2);
+          maxX = Math.max(maxX, x1, x2);
+          minY = Math.min(minY, y1, y2);
+          maxY = Math.max(maxY, y1, y2);
+        });
+      };
+
+      processEdges(xSegments, edgesX);
+      processEdges(zSegments, edgesZ);
+
+      // Also process vertical edges just for bounding box
+      const ySegments = [
+        [new THREE.Vector3(-hs, -hs, -hs), new THREE.Vector3(-hs, hs, -hs)],
+        [new THREE.Vector3(hs, -hs, -hs), new THREE.Vector3(hs, hs, -hs)],
+        [new THREE.Vector3(-hs, -hs, hs), new THREE.Vector3(-hs, hs, hs)],
+        [new THREE.Vector3(hs, -hs, hs), new THREE.Vector3(hs, hs, hs)],
+      ];
+      ySegments.forEach(seg => {
+        const start = seg[0].clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cubeRotation).add(new THREE.Vector3(...cubePos));
+        const end = seg[1].clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cubeRotation).add(new THREE.Vector3(...cubePos));
+        const [x1, y1] = projectVec(start);
+        const [x2, y2] = projectVec(end);
+        minX = Math.min(minX, x1, x2);
+        maxX = Math.max(maxX, x1, x2);
+        minY = Math.min(minY, y1, y2);
+        maxY = Math.max(maxY, y1, y2);
+      });
 
       // Add Padding
-      const padding = Math.min(width, height) * 0.05; // 5% padding
+      const contentWidth = maxX - minX;
+      const contentHeight = maxY - minY;
+      const padding = Math.max(contentWidth, contentHeight) * 0.1; // 10% of object size
+
       minX = Math.max(0, Math.floor(minX - padding));
       minY = Math.max(0, Math.floor(minY - padding));
       maxX = Math.min(width, Math.ceil(maxX + padding));
@@ -317,37 +441,88 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
       const cropWidth = maxX - minX;
       const cropHeight = maxY - minY;
 
-      try {
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = cropWidth;
-        tempCanvas.height = cropHeight;
+      const solidData = getCroppedImage(minX, minY, cropWidth, cropHeight);
 
-        const ctx = tempCanvas.getContext('2d');
-        if (ctx) {
-          // Draw cropped region
-          // Source: gl.domElement (the full canvas)
-          // Source X/Y: minX, minY
-          // Source W/H: cropWidth, cropHeight
-          // Dest X/Y: 0, 0
-          // Dest W/H: cropWidth, cropHeight
-          ctx.drawImage(gl.domElement, minX, minY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+      // --- 2. Wireframe Render (Lines) ---
+      // Transparent BG
+      scene.background = null;
+      // Hide solid faces
+      if (cubeMaterial.current) cubeMaterial.current.visible = false;
 
-          const data = tempCanvas.toDataURL('image/png');
-          onCapture(data);
+      gl.clear();
+      gl.render(scene, camera);
 
-          // Restore background
-          scene.background = originalInfo.background;
-        } else {
-          throw new Error("Could not get 2d context");
+      const wireframeData = getCroppedImage(minX, minY, cropWidth, cropHeight);
+
+      // Restore
+      if (cubeMaterial.current) cubeMaterial.current.visible = true;
+      scene.background = originalInfo.background;
+
+      // --- Calculate VP Positions (Screen Space) ---
+      const camZ = camera.position.z;
+
+      // Helper function to project a point
+      const projectPoint = (x: number, y: number, z: number) => {
+        const vec = new THREE.Vector3(x, y, z);
+        vec.project(camera);
+        const px = (vec.x + 1) / 2 * width;
+        const py = -(vec.y - 1) / 2 * height;
+        // Adjust for crop
+        return [px - minX, py - minY] as [number, number];
+      };
+
+      let vpLeftCoords: [number, number] | null = null;
+      let vpRightCoords: [number, number] | null = null;
+      // Horizon Y in screen space (project center of horizon)
+      const horizonCenter = projectPoint(0, 0, HORIZON_Z);
+      const horizonY = horizonCenter[1];
+
+      if (preset === '1pt') {
+        // 1pt: Center VP corresponds to Z axis
+        const vp = getVanishingPoint(camera, cubeRotation, 'z');
+        if (vp) vpLeftCoords = projectPoint(vp.x, vp.y, vp.z);
+      } else if (preset === '2pt') {
+        const vp1 = getVanishingPoint(camera, cubeRotation, 'x');
+        const vp2 = getVanishingPoint(camera, cubeRotation, 'z');
+
+        if (vp1) {
+          const coords = projectPoint(vp1.x, vp1.y, vp1.z);
+          // Assign to Left/Right based on screen X
+          if (!vpLeftCoords || coords[0] < vpLeftCoords[0]) {
+            vpRightCoords = vpLeftCoords; // Push existing to right if new is more left? Simplified below
+            vpLeftCoords = coords;
+          } else {
+            vpRightCoords = coords;
+          }
         }
-      } catch (e) {
-        console.error("Crop failed, falling back to full capture", e);
-        const data = gl.domElement.toDataURL('image/png');
-        onCapture(data);
-        scene.background = originalInfo.background;
+        if (vp2) {
+          const coords = projectPoint(vp2.x, vp2.y, vp2.z);
+          if (!vpLeftCoords) {
+            vpLeftCoords = coords;
+          } else if (coords[0] < vpLeftCoords[0]) {
+            vpRightCoords = vpLeftCoords;
+            vpLeftCoords = coords;
+          } else {
+            vpRightCoords = coords;
+          }
+        }
+      }
+
+      const meta = {
+        vpLeft: vpLeftCoords,
+        vpRight: vpRightCoords,
+        horizonY: horizonY,
+        edgesX: edgesX.map(e => [e[0] - minX, e[1] - minY, e[2] - minX, e[3] - minY]),
+        edgesZ: edgesZ.map(e => [e[0] - minX, e[1] - minY, e[2] - minX, e[3] - minY]),
+        width: cropWidth,
+        height: cropHeight
+      };
+
+      if (solidData && wireframeData) {
+        onCapture(solidData, wireframeData, meta);
       }
     }
-  }, [triggerCapture, gl, scene, camera, onCapture, cubePos, cubeRotation]);
+  }, [triggerCapture, gl, scene, camera, onCapture, cubePos, cubeRotation, preset]);
 
   // Handle Dragging
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
@@ -355,6 +530,12 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
     e.stopPropagation();
     isDragging.current = true;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
+
+    // Calculate offset from current cube pos to intersection point on plane
+    // Intersect plane z=0
+    const pointOnPlane = new THREE.Vector3();
+    e.ray.intersectPlane(dragPlane, pointOnPlane);
+    dragOffset.current.copy(new THREE.Vector3(...cubePos)).sub(pointOnPlane);
 
     if (interactionMode === 'rotate') {
       startX.current = e.clientX;
@@ -373,8 +554,13 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
     e.stopPropagation();
 
     if (interactionMode === 'move') {
-      // Project ray to plane at z=0
-      onCubeMove([e.point.x, e.point.y, 0]);
+      // Project ray to plane at z=0 using mathematical plane, not object surface
+      const pointOnPlane = new THREE.Vector3();
+      e.ray.intersectPlane(dragPlane, pointOnPlane);
+      if (pointOnPlane) {
+        const newPos = pointOnPlane.add(dragOffset.current);
+        onCubeMove([newPos.x, newPos.y, 0]);
+      }
     } else {
       const deltaX = e.clientX - startX.current;
       const sensitivity = 0.005;
@@ -389,46 +575,51 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
       <ambientLight intensity={0.8} />
       <directionalLight position={[5, 10, 5]} intensity={1.2} />
 
-      <PerspectiveMarkers
-        preset={preset}
-        totalRotation={totalRotation}
-        visible={areHelpersVisible}
+      <gridHelper
+        args={[10000, 200, 0xdddddd, 0xeeeeee]}
+        position={[0, -1.25, 0]}
+        visible={areHelpersVisible && showGuides}
       />
 
-      <PerspectiveGuides
-        enabled={showGuides && areHelpersVisible}
-        preset={preset}
-        cubePos={cubePos}
-        totalRotation={totalRotation}
-      />
+      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && (
+        // Horizon Line
+        <HorizonHelper camera={camera} />
+      )}
 
-      {(preset === '1pt' || preset === '2pt') && (
-        <mesh
-          visible={false}
-          position={[0, 0, 0]}
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-        >
-          <planeGeometry args={[100, 100]} />
-          <meshBasicMaterial />
-        </mesh>
+      {/* Vanishing Point Metrics (Debug/Visual) */}
+      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && (
+        <VPHelpers camera={camera} rotation={cubeRotation} cubePos={cubePos} preset={preset} />
       )}
 
       <mesh
+        ref={cubeMesh}
         position={preset === 'free' ? [0, 0, 0] : cubePos}
         rotation={[0, totalRotation, 0]}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
       >
         <boxGeometry args={[2.5, 2.5, 2.5]} />
         {triggerCapture ? (
-          <meshBasicMaterial color="#ffffff" />
+          <meshBasicMaterial ref={cubeMaterial as any} color="#ffffff" />
         ) : (
-          <meshStandardMaterial color="#ffffff" roughness={0.9} metalness={0.1} />
+          <meshStandardMaterial ref={cubeMaterial as any} color="#ffffff" roughness={0.9} metalness={0.1} />
         )}
         <lineSegments>
           <edgesGeometry args={[edgeGeometry]} />
           <lineBasicMaterial color="#2D2D2D" linewidth={2} />
         </lineSegments>
+      </mesh>
+
+      <mesh
+        visible={false}
+        position={[0, 0, 0]}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      >
+        <planeGeometry args={[100, 100]} />
+        <meshBasicMaterial />
       </mesh>
 
       <Environment preset="city" />
@@ -441,14 +632,34 @@ type Step = 'pose' | 'draw' | 'result';
 const CritiqueZone: React.FC = () => {
   const [step, setStep] = useState<Step>('pose');
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [referenceLines, setReferenceLines] = useState<string | null>(null);
   const [userDrawing, setUserDrawing] = useState<string | null>(null);
   const [triggerCapture, setTriggerCapture] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
+  const [lineSets, setLineSets] = useState<{
+    leftSet: { start: [number, number], end: [number, number] }[],
+    rightSet: { start: [number, number], end: [number, number] }[],
+    verticalSet: { start: [number, number], end: [number, number] }[]
+  }>({ leftSet: [], rightSet: [], verticalSet: [] });
+
+  const [captureMeta, setCaptureMeta] = useState<{
+    vpLeft: [number, number] | null,
+    vpRight: [number, number] | null,
+    horizonY: number | null,
+    edgesX?: [number, number, number, number][],
+    edgesZ?: [number, number, number, number][],
+    width?: number,
+    height?: number
+  }>({ vpLeft: null, vpRight: null, horizonY: null });
+
+  const [overlayOpacity, setOverlayOpacity] = useState(0.5);
+
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const [fov, setFov] = useState(55);
   const [cameraDistance, setCameraDistance] = useState(15);
-  // Removed cameraHeight state
+  const [cameraHeight, setCameraHeight] = useState(0);
+
   const [preset, setPreset] = useState('1pt');
   const [showGuides, setShowGuides] = useState(true);
   const [cubePos, setCubePos] = useState<[number, number, number]>([0, 0, 0]);
@@ -457,10 +668,10 @@ const CritiqueZone: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-
-
-  const handleCapture = (data: string) => {
+  const handleCapture = (data: string, lines: string, meta?: any) => {
     setReferenceImage(data);
+    setReferenceLines(lines);
+    if (meta) setCaptureMeta(meta);
     setTriggerCapture(false);
     setStep('draw');
   };
@@ -486,9 +697,21 @@ const CritiqueZone: React.FC = () => {
     setStep('result');
     try {
       const result = await compareDrawings(referenceImage, userDrawing);
-      setAnalysis(result);
+      // Handle both string (error case) and object (success case)
+      if (typeof result === 'string') {
+        setAnalysis(result);
+        setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
+      } else {
+        setAnalysis(result.feedback);
+        setLineSets({
+          leftSet: result.leftSet || [],
+          rightSet: result.rightSet || [],
+          verticalSet: result.verticalSet || []
+        });
+      }
     } catch (error) {
       setAnalysis("Error analyzing images. Please try again.");
+      setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
     } finally {
       setIsAnalyzing(false);
     }
@@ -497,8 +720,11 @@ const CritiqueZone: React.FC = () => {
   const resetFlow = () => {
     setStep('pose');
     setReferenceImage(null);
+    setReferenceLines(null);
     setUserDrawing(null);
     setAnalysis(null);
+    setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
+    setCaptureMeta({ vpLeft: null, vpRight: null, horizonY: null });
     setIsAnalyzing(false);
   };
 
@@ -525,7 +751,7 @@ const CritiqueZone: React.FC = () => {
         <div className="flex-1 w-full relative">
           <Canvas gl={{ preserveDrawingBuffer: true }}>
             <Suspense fallback={null}>
-              <CameraController fov={fov} preset={preset} distance={cameraDistance} />
+              <CameraController fov={fov} preset={preset} distance={cameraDistance} height={cameraHeight} />
               <SceneContent
                 onCapture={handleCapture}
                 triggerCapture={triggerCapture}
@@ -565,7 +791,7 @@ const CritiqueZone: React.FC = () => {
                       className="p-1.5 rounded hover:bg-sketch-yellow border-2 border-transparent hover:border-pencil transition-all text-pencil transform active:scale-95"
                       title="Reset View"
                     >
-                      <Icons.ResetSquare />
+                      <Icons.RotateCcw />
                     </button>
                   </div>
 
@@ -618,6 +844,19 @@ const CritiqueZone: React.FC = () => {
                 />
               </div>
 
+              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
+                <span className="text-sm font-bold text-pencil font-hand">Height</span>
+                <input
+                  type="range"
+                  min="-5"
+                  max="10"
+                  step="0.5"
+                  value={cameraHeight}
+                  onChange={(e) => setCameraHeight(Number(e.target.value))}
+                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
+                />
+              </div>
+
               {(preset === '1pt' || preset === '2pt') && (
                 <div className="pl-2">
                   <button
@@ -659,7 +898,6 @@ const CritiqueZone: React.FC = () => {
     );
   }
 
-  // ... rest of the component matches previous version logic (draw step, result step, etc)
   if (step === 'draw') {
     return (
       <div className="h-full flex flex-col bg-paper p-4 md:p-6 overflow-y-auto">
@@ -668,7 +906,7 @@ const CritiqueZone: React.FC = () => {
             <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Your Reference</h2>
             <button onClick={resetFlow} className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline">Cancel</button>
           </div>
-          <div className="bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil transform rotate-1">
+          <div className="bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil">
             <div className="bg-white border-2 border-pencil/10">
               <img src={referenceImage!} alt="Reference" className="w-full aspect-[4/3] object-contain" />
             </div>
@@ -707,9 +945,88 @@ const CritiqueZone: React.FC = () => {
             <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">Model</p>
             <img src={referenceImage!} className="w-full h-24 object-contain" alt="ref" />
           </div>
-          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform rotate-1">
-            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">You</p>
-            <img src={userDrawing!} className="w-full h-24 object-contain" alt="user" />
+          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform rotate-1 relative group">
+            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">You & True Perspective</p>
+            <div className="relative w-full" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
+              <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
+
+              {/* Reference Wireframe Overlay */}
+              <img
+                src={referenceLines!}
+                className="absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-200"
+                style={{ opacity: overlayOpacity }}
+                alt="reference overlay"
+              />
+
+              {/* Perspective Lines Overlay */}
+              {captureMeta.width && captureMeta.height && (
+                <svg
+                  viewBox={`0 0 ${captureMeta.width} ${captureMeta.height}`}
+                  className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
+                >
+                  {captureMeta.horizonY !== null && (
+                    <line
+                      x1="-10000" y1={captureMeta.horizonY}
+                      x2="10000" y2={captureMeta.horizonY}
+                      stroke="red" strokeWidth="2" strokeDasharray="10 10" opacity="0.3"
+                    />
+                  )}
+
+                  {/* 1PT / 2PT Z-Edges (Orange) - Go to Center VP (1pt) or Right VP (2pt) */}
+                  {captureMeta.edgesZ && captureMeta.edgesZ.map((edge, i) => {
+                    let targetVP = null;
+                    if (preset === '1pt') targetVP = captureMeta.vpLeft; // The single VP
+                    else targetVP = captureMeta.vpRight; // The Z VP
+
+                    if (!targetVP) return null;
+
+                    const midX = (edge[0] + edge[2]) / 2;
+                    const midY = (edge[1] + edge[3]) / 2;
+
+                    return (
+                      <line
+                        key={`z-${i}`}
+                        x1={midX} y1={midY}
+                        x2={targetVP[0]} y2={targetVP[1]}
+                        stroke="orange" strokeWidth="1" opacity="0.2"
+                      />
+                    );
+                  })}
+
+                  {/* 2PT X-Edges (Cyan) - Go to Left VP */}
+                  {captureMeta.edgesX && captureMeta.edgesX.map((edge, i) => {
+                    const targetVP = captureMeta.vpLeft;
+                    if (preset !== '2pt' || !targetVP) return null;
+
+                    const midX = (edge[0] + edge[2]) / 2;
+                    const midY = (edge[1] + edge[3]) / 2;
+
+                    return (
+                      <line
+                        key={`x-${i}`}
+                        x1={midX} y1={midY}
+                        x2={targetVP[0]} y2={targetVP[1]}
+                        stroke="cyan" strokeWidth="1" opacity="0.2"
+                      />
+                    );
+                  })}
+                </svg>
+              )}
+
+              {/* Opacity Control Hint */}
+              <div className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 text-white text-[10px] px-1 rounded pointer-events-none">
+                Ref Opacity: {Math.round(overlayOpacity * 100)}%
+              </div>
+            </div>
+
+            {/* Range Input for Opacity */}
+            <input
+              type="range"
+              min="0" max="1" step="0.1"
+              value={overlayOpacity}
+              onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
+              className="absolute -bottom-6 left-0 right-0 w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            />
           </div>
         </div>
         <div className="bg-paper rounded-sm shadow-sketch border-2 border-pencil p-6 min-h-[300px] relative">

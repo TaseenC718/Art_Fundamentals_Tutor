@@ -128,6 +128,7 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
   const meshRef2 = useRef<THREE.Mesh>(null);
   const lineRef1 = useRef<THREE.LineSegments>(null);
   const lineRef2 = useRef<THREE.LineSegments>(null);
+  const lineRef3 = useRef<THREE.LineSegments>(null);
 
   useFrame(() => {
     const vpX = getVanishingPoint(camera, rotation, 'x');
@@ -239,7 +240,7 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
     // --- Update VP 1 (Cyan / X-axis) ---
     // Only visible in 2pt
     if (meshRef1.current && lineRef1.current) {
-      if (preset === '2pt' && vpX) {
+      if ((preset === '2pt' || preset === '3pt') && vpX) {
         meshRef1.current.visible = true;
         meshRef1.current.position.copy(vpX);
         updateLines(vpX, lineRef1, 'cyan');
@@ -259,6 +260,55 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
       } else {
         meshRef2.current.visible = false;
         lineRef2.current.visible = false;
+      }
+    }
+
+
+    // --- Update VP 3 (Green / Y-axis) ---
+    // Visible in 3pt (Vertical convergence)
+    if (lineRef3.current) {
+      if (preset === '3pt') {
+        const dirY = camera.position.y >= 0 ? -1 : 1; // If looking down, converge down. If looking up, converge up.
+
+        lineRef3.current.visible = true;
+        const positions = lineRef3.current.geometry.attributes.position;
+        let idx = 0;
+
+        const halfSize = 1.25;
+        // 4 Vertical edges: (+-hs, ?, +-hs)
+        const corners = [
+          [-halfSize, -halfSize], // x, z
+          [halfSize, -halfSize],
+          [-halfSize, halfSize],
+          [halfSize, halfSize]
+        ];
+
+        corners.forEach(([x, z]) => {
+          // Edge goes from y=-hs to y=hs.
+
+          // Vertical Edge at (x, z)
+          const pTop = new THREE.Vector3(x, halfSize, z);
+          const pBottom = new THREE.Vector3(x, -halfSize, z);
+
+          pTop.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation).add(new THREE.Vector3(...cubePos));
+          pBottom.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation).add(new THREE.Vector3(...cubePos));
+
+          // Extend
+          const extension = 10000;
+
+          if (dirY === -1) {
+            // Converge Down
+            positions.setXYZ(idx++, pTop.x, pTop.y, pTop.z); // Start at top
+            positions.setXYZ(idx++, pTop.x, pTop.y - extension, pTop.z); // Go way down
+          } else {
+            // Converge Up
+            positions.setXYZ(idx++, pBottom.x, pBottom.y, pBottom.z); // Start at bottom
+            positions.setXYZ(idx++, pBottom.x, pBottom.y + extension, pBottom.z); // Go way up
+          }
+        });
+        positions.needsUpdate = true;
+      } else {
+        lineRef3.current.visible = false;
       }
     }
   });
@@ -295,6 +345,18 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
           />
         </bufferGeometry>
         <lineBasicMaterial color="orange" opacity={0.5} transparent />
+      </lineSegments>
+
+      <lineSegments ref={lineRef3 as any}>
+        <bufferGeometry>
+          <bufferAttribute
+            attach="attributes-position"
+            count={8}
+            array={new Float32Array(24)}
+            itemSize={3}
+          />
+        </bufferGeometry>
+        <lineBasicMaterial color="#32CD32" opacity={0.5} transparent />
       </lineSegments>
     </>
   );
@@ -526,7 +588,7 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
 
   // Handle Dragging
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
-    if (preset !== '1pt' && preset !== '2pt') return;
+    if (preset !== '1pt' && preset !== '2pt' && preset !== '3pt') return;
     e.stopPropagation();
     isDragging.current = true;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -544,13 +606,13 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
   };
 
   const handlePointerUp = (e: ThreeEvent<PointerEvent>) => {
-    if (preset !== '1pt' && preset !== '2pt') return;
+    if (preset !== '1pt' && preset !== '2pt' && preset !== '3pt') return;
     isDragging.current = false;
     (e.target as HTMLElement).releasePointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
-    if ((preset !== '1pt' && preset !== '2pt') || !isDragging.current) return;
+    if ((preset !== '1pt' && preset !== '2pt' && preset !== '3pt') || !isDragging.current) return;
     e.stopPropagation();
 
     if (interactionMode === 'move') {
@@ -581,13 +643,13 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         visible={areHelpersVisible && showGuides}
       />
 
-      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && (
-        // Horizon Line
+      {(preset === '1pt' || preset === '2pt' || preset === '3pt') && areHelpersVisible && (
+        // Horizon Line - Always visible
         <HorizonHelper camera={camera} />
       )}
 
       {/* Vanishing Point Metrics (Debug/Visual) */}
-      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && (
+      {(preset === '1pt' || preset === '2pt' || preset === '3pt') && areHelpersVisible && showGuides && (
         <VPHelpers camera={camera} rotation={cubeRotation} cubePos={cubePos} preset={preset} />
       )}
 
@@ -731,18 +793,30 @@ const CritiqueZone: React.FC = () => {
   const handlePresetChange = (newPreset: string) => {
     setPreset(newPreset);
     setCubePos([0, 0, 0]);
-    setCubeRotation(newPreset === '2pt' ? Math.PI / 4 : 0);
+    setCubeRotation((newPreset === '2pt' || newPreset === '3pt') ? Math.PI / 4 : 0);
     setInteractionMode('move');
-    if (newPreset === '1pt' || newPreset === '2pt') {
+    if (newPreset === '1pt' || newPreset === '2pt' || newPreset === '3pt') {
       setShowGuides(true);
     } else {
       setShowGuides(false);
+    }
+
+    // Reset height for 1pt/2pt (Strict horizontal view)
+    if (newPreset === '1pt' || newPreset === '2pt') {
+      setCameraHeight(0);
+    } else if (newPreset === '3pt') {
+      setCameraHeight(5);
     }
   };
 
   const resetAngle = () => {
     setCubePos([0, 0, 0]);
-    setCubeRotation(preset === '2pt' ? Math.PI / 4 : 0);
+    setCubeRotation((preset === '2pt' || preset === '3pt') ? Math.PI / 4 : 0);
+    if (preset === '3pt') {
+      setCameraHeight(5);
+    } else if (preset === '1pt' || preset === '2pt') {
+      setCameraHeight(0);
+    }
   };
 
   if (step === 'pose') {
@@ -768,7 +842,7 @@ const CritiqueZone: React.FC = () => {
 
           <div className="absolute top-4 left-4 right-4 flex flex-col items-center pointer-events-none gap-4">
             <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg p-2 flex gap-2 pointer-events-auto border-2 border-pencil">
-              {['1pt', '2pt', 'free'].map((mode) => (
+              {['1pt', '2pt', '3pt', 'free'].map((mode) => (
                 <button
                   key={mode}
                   onClick={() => handlePresetChange(mode)}
@@ -783,7 +857,7 @@ const CritiqueZone: React.FC = () => {
             </div>
 
             <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg px-4 py-2 flex items-center gap-4 pointer-events-auto flex-wrap justify-center border-2 border-pencil mt-2">
-              {(preset === '1pt' || preset === '2pt') && (
+              {(preset === '1pt' || preset === '2pt' || preset === '3pt') && (
                 <>
                   <div className="flex items-center gap-1 pr-4 border-r-2 border-pencil">
                     <button
@@ -844,20 +918,22 @@ const CritiqueZone: React.FC = () => {
                 />
               </div>
 
-              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
-                <span className="text-sm font-bold text-pencil font-hand">Height</span>
-                <input
-                  type="range"
-                  min="-5"
-                  max="10"
-                  step="0.5"
-                  value={cameraHeight}
-                  onChange={(e) => setCameraHeight(Number(e.target.value))}
-                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
-                />
-              </div>
+              {preset === '3pt' && (
+                <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
+                  <span className="text-sm font-bold text-pencil font-hand">Height</span>
+                  <input
+                    type="range"
+                    min="-20"
+                    max="20"
+                    step="1"
+                    value={cameraHeight}
+                    onChange={(e) => setCameraHeight(Number(e.target.value))}
+                    className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
+                  />
+                </div>
+              )}
 
-              {(preset === '1pt' || preset === '2pt') && (
+              {(preset === '1pt' || preset === '2pt' || preset === '3pt') && (
                 <div className="pl-2">
                   <button
                     onClick={() => setShowGuides(!showGuides)}

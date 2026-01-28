@@ -69,24 +69,42 @@ export const generateCritique = async (imageBase64: string, userQuestion: string
 /**
  * Compares a user's drawing with a reference image.
  */
-export const compareDrawings = async (referenceImage: string, userDrawing: string): Promise<string> => {
+export const compareDrawings = async (referenceImage: string, userDrawing: string): Promise<{
+  feedback: string,
+  leftSet: { start: [number, number], end: [number, number] }[],
+  rightSet: { start: [number, number], end: [number, number] }[],
+  verticalSet: { start: [number, number], end: [number, number] }[]
+}> => {
   try {
     const model = genAI.getGenerativeModel({
       model: MODEL_NAME,
-      systemInstruction: "You are a strict art teacher checking a student's observational drawing exercise. You value precision in copying the angle and perspective of the reference object."
+      generationConfig: { responseMimeType: "application/json" },
+      systemInstruction: "You are a specialized Perspective Geometry Analyzer. Your job is to extract the key structural lines from a user's drawing of a cube and categorize them by their intended vanishing point."
     });
 
     const refData = referenceImage.split(',')[1] || referenceImage;
     const userData = userDrawing.split(',')[1] || userDrawing;
 
     const prompt = `
-      Compare the User's Drawing (Image 2) with the Reference Cube (Image 1). 
-      1. **Perspective Accuracy**: Do the angles in the drawing match the reference?
-      2. **Proportions**: Is the cube too thin, tall, or wide compared to the reference?
-      3. **Line Quality**: Are the lines straight and confident?
+      Analyze the User's Drawing (Image 2) compared to the Reference (Image 1).
       
-      Give a score out of 100% for Accuracy. 
-      Provide 3 specific corrections to help the user match the reference better next time.
+      1. **Extract Lines**: Identify the edges of the drawn cube.
+      2. **Categorize**: Group them into three sets:
+         - **Left Set**: Lines that should converge to the Left Vanishing Point.
+         - **Right Set**: Lines that should converge to the Right Vanishing Point.
+         - **Vertical Set**: Vertical edges.
+      3. **Feedback**: Provide strict, constructive feedback on the convergence.
+      
+      Return JSON:
+      {
+        "feedback": "Markdown string. Score /100. Specific advice on which set of lines is drifting.",
+        "leftSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
+        "rightSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
+        "verticalSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ]
+      }
+      
+      - Coordinates [0-1000].
+      - Ignore minor sketch lines; find the dominant structural edges.
     `;
 
     const result = await model.generateContent([
@@ -97,11 +115,17 @@ export const compareDrawings = async (referenceImage: string, userDrawing: strin
       prompt
     ]);
     const response = await result.response;
+    const text = response.text();
 
-    return response.text();
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      console.error("Failed to parse JSON:", text);
+      return { feedback: text, leftSet: [], rightSet: [], verticalSet: [] };
+    }
   } catch (error) {
     console.error("Gemini Comparison Error:", error);
-    return "Failed to compare images. Please try again.";
+    return { feedback: "Failed to compare images. Please try again.", leftSet: [], rightSet: [], verticalSet: [] };
   }
 }
 
@@ -129,4 +153,3 @@ export const generateLesson = async (topic: string): Promise<string> => {
     return "Error generating lesson.";
   }
 };
-

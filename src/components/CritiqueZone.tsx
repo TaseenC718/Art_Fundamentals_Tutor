@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import * as Icons from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import { compareDrawings } from '../services/geminiService';
+import { recordCritique } from '../services/storageService';
 
 // --- Helper Functions for VP Calculation ---
 const HORIZON_Z = -100; // Far distance for horizon line
@@ -708,6 +709,8 @@ const CritiqueZone: React.FC = () => {
           rightSet: result.rightSet || [],
           verticalSet: result.verticalSet || []
         });
+        // Record critique completion for progress tracking
+        recordCritique();
       }
     } catch (error) {
       setAnalysis("Error analyzing images. Please try again.");

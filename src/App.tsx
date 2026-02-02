@@ -2,11 +2,16 @@ import React, { useState } from 'react';
 import CritiqueZone from './components/CritiqueZone';
 import Home from './components/Home';
 import Progress from './components/Progress';
+import Settings from './components/Settings';
 import { AppMode } from './types';
 import { Icons } from './components/Icon';
+import { Settings as SettingsIcon } from 'lucide-react';
+import { getDifficulty, Difficulty } from './services/storageService';
 
 const App: React.FC = () => {
   const [activeMode, setActiveMode] = useState<AppMode>('practice');
+  const [showSettings, setShowSettings] = useState(false);
+  const [difficulty, setDifficultyState] = useState<Difficulty>(getDifficulty);
 
   const NavItem = ({ mode, icon, label }: { mode: AppMode; icon: React.ReactNode; label: string }) => (
     <button
@@ -26,10 +31,26 @@ const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen bg-paper overflow-hidden relative font-hand text-pencil">
 
+      {/* Settings Button */}
+      <button
+        onClick={() => setShowSettings(true)}
+        className="absolute top-4 right-4 z-40 w-10 h-10 bg-white border-2 border-pencil rounded-full flex items-center justify-center shadow-sketch hover:bg-sketch-yellow transition-colors"
+        aria-label="Settings"
+      >
+        <SettingsIcon size={20} />
+      </button>
+
+      {/* Settings Modal */}
+      <Settings
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        onDifficultyChange={setDifficultyState}
+      />
+
       {/* Main Content Area */}
       <main className="flex-1 relative overflow-hidden">
         {activeMode === 'profile' && <Home />}
-        {activeMode === 'practice' && <CritiqueZone />}
+        {activeMode === 'practice' && <CritiqueZone difficulty={difficulty} />}
         {activeMode === 'progress' && <Progress />}
       </main>
 

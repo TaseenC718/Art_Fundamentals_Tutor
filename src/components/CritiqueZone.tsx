@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import * as Icons from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import { compareDrawings } from '../services/geminiService';
-import { recordCritique } from '../services/storageService';
+import { recordCritique, getDifficulty, DIFFICULTY_CONFIG } from '../services/storageService';
 
 // --- Helper Functions for VP Calculation ---
 const HORIZON_Z = -100; // Far distance for horizon line
@@ -630,7 +630,11 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
 
 type Step = 'pose' | 'draw' | 'result';
 
-const CritiqueZone: React.FC = () => {
+interface CritiqueZoneProps {
+  difficulty?: 'beginner' | 'intermediate' | 'advanced';
+}
+
+const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp }) => {
   const [step, setStep] = useState<Step>('pose');
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referenceLines, setReferenceLines] = useState<string | null>(null);
@@ -662,7 +666,18 @@ const CritiqueZone: React.FC = () => {
   const [cameraHeight, setCameraHeight] = useState(0);
 
   const [preset, setPreset] = useState('1pt');
-  const [showGuides, setShowGuides] = useState(true);
+  const [showGuides, setShowGuides] = useState(() => {
+    const difficulty = getDifficulty();
+    return DIFFICULTY_CONFIG[difficulty].showGuides;
+  });
+
+  // Update showGuides when difficulty changes
+  useEffect(() => {
+    if (difficultyProp) {
+      setShowGuides(DIFFICULTY_CONFIG[difficultyProp].showGuides);
+    }
+  }, [difficultyProp]);
+
   const [cubePos, setCubePos] = useState<[number, number, number]>([0, 0, 0]);
   const [cubeRotation, setCubeRotation] = useState(0);
   const [interactionMode, setInteractionMode] = useState<'move' | 'rotate'>('move');

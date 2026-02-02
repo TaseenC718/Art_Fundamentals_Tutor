@@ -1,4 +1,7 @@
 const STORAGE_KEY = 'art-tutor-progress';
+const SETTINGS_KEY = 'art-tutor-settings';
+
+export type Difficulty = 'beginner' | 'intermediate' | 'advanced';
 
 export interface DailyTask {
   id: number;
@@ -17,6 +20,10 @@ export interface UserProgress {
   weeklyActivity: number[]; // Last 7 days of practice minutes/sessions
 }
 
+export interface UserSettings {
+  difficulty: Difficulty;
+}
+
 const DEFAULT_PROGRESS: UserProgress = {
   xp: 0,
   level: 1,
@@ -26,6 +33,10 @@ const DEFAULT_PROGRESS: UserProgress = {
   totalLessons: 0,
   completedTaskIds: [],
   weeklyActivity: [0, 0, 0, 0, 0, 0, 0],
+};
+
+const DEFAULT_SETTINGS: UserSettings = {
+  difficulty: 'intermediate',
 };
 
 const DAILY_TASKS: DailyTask[] = [
@@ -179,3 +190,62 @@ export function getLevelTitle(level: number): string {
   if (level <= 20) return 'Vanishing Point Veteran';
   return 'Perspective Master';
 }
+
+// Settings functions
+export function getSettings(): UserSettings {
+  try {
+    const stored = localStorage.getItem(SETTINGS_KEY);
+    if (stored) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(stored) };
+    }
+  } catch (e) {
+    console.error('Failed to load settings:', e);
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+export function saveSettings(settings: UserSettings): void {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (e) {
+    console.error('Failed to save settings:', e);
+  }
+}
+
+export function setDifficulty(difficulty: Difficulty): void {
+  const settings = getSettings();
+  settings.difficulty = difficulty;
+  saveSettings(settings);
+}
+
+export function getDifficulty(): Difficulty {
+  return getSettings().difficulty;
+}
+
+// Difficulty configuration
+export const DIFFICULTY_CONFIG = {
+  beginner: {
+    label: 'Beginner',
+    description: 'All guides visible, simpler feedback',
+    showGuides: true,
+    showVanishingPoints: true,
+    showHorizon: true,
+    feedbackDetail: 'detailed',
+  },
+  intermediate: {
+    label: 'Intermediate',
+    description: 'Standard guides, balanced feedback',
+    showGuides: true,
+    showVanishingPoints: true,
+    showHorizon: true,
+    feedbackDetail: 'standard',
+  },
+  advanced: {
+    label: 'Advanced',
+    description: 'Minimal guides, concise feedback',
+    showGuides: false,
+    showVanishingPoints: false,
+    showHorizon: true,
+    feedbackDetail: 'concise',
+  },
+} as const;

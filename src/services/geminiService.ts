@@ -1,9 +1,32 @@
 import { GoogleGenerativeAI, Content, Part } from "@google/generative-ai";
+import { getDifficulty, Difficulty } from './storageService';
 
 // Initialize the client
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
 
 const MODEL_NAME = 'gemini-3-flash-preview';
+
+// Feedback instructions based on difficulty
+const FEEDBACK_INSTRUCTIONS: Record<Difficulty, string> = {
+  beginner: `
+    Provide DETAILED, encouraging feedback for a beginner:
+    - Explain WHY certain lines should converge
+    - Point out what they did WELL first
+    - Give step-by-step guidance on fixing issues
+    - Use simple language, avoid jargon
+    - Be encouraging and supportive`,
+  intermediate: `
+    Provide BALANCED feedback:
+    - Note strengths and areas for improvement
+    - Give specific, actionable advice
+    - Reference perspective principles briefly`,
+  advanced: `
+    Provide CONCISE, technical feedback:
+    - Skip basics, focus on subtle errors
+    - Use technical terminology
+    - Brief, direct critique
+    - Challenge them to refine details`
+};
 
 /**
  * Sends a text message to the chat model.
@@ -85,16 +108,19 @@ export const compareDrawings = async (referenceImage: string, userDrawing: strin
     const refData = referenceImage.split(',')[1] || referenceImage;
     const userData = userDrawing.split(',')[1] || userDrawing;
 
+    const difficulty = getDifficulty();
+    const feedbackStyle = FEEDBACK_INSTRUCTIONS[difficulty];
+
     const prompt = `
       Analyze the User's Drawing (Image 2) compared to the Reference (Image 1).
-      
+
       1. **Extract Lines**: Identify the edges of the drawn cube.
       2. **Categorize**: Group them into three sets:
          - **Left Set**: Lines that should converge to the Left Vanishing Point.
          - **Right Set**: Lines that should converge to the Right Vanishing Point.
          - **Vertical Set**: Vertical edges.
-      3. **Feedback**: Provide strict, constructive feedback on the convergence.
-      
+      3. **Feedback**: ${feedbackStyle}
+
       Return JSON:
       {
         "feedback": "Markdown string. Score /100. Specific advice on which set of lines is drifting.",
@@ -102,7 +128,7 @@ export const compareDrawings = async (referenceImage: string, userDrawing: strin
         "rightSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
         "verticalSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ]
       }
-      
+
       - Coordinates [0-1000].
       - Ignore minor sketch lines; find the dominant structural edges.
     `;

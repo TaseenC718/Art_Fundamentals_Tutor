@@ -6,6 +6,7 @@ import * as Icons from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import { compareDrawings } from '../services/geminiService';
 import { recordCritique, getDifficulty, DIFFICULTY_CONFIG } from '../services/storageService';
+import Camera from './Camera';
 
 // --- Helper Functions for VP Calculation ---
 const HORIZON_Z = -100; // Far distance for horizon line
@@ -683,6 +684,12 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   const [interactionMode, setInteractionMode] = useState<'move' | 'rotate'>('move');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showArchiveModal, setShowArchiveModal] = useState(false);
+
+  const handleArchiveSelect = (imageData: string) => {
+    setUserDrawing(imageData);
+    setShowArchiveModal(false);
+  };
 
   const handleCapture = (data: string, lines: string, meta?: any) => {
     setReferenceImage(data);
@@ -919,6 +926,29 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   if (step === 'draw') {
     return (
       <div className="h-full flex flex-col bg-paper p-4 md:p-6 overflow-y-auto">
+        {/* Archive Selection Modal */}
+        {showArchiveModal && (
+          <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
+            <div className="bg-paper w-full max-w-lg max-h-[90vh] rounded-xl border-2 border-pencil shadow-sketch overflow-hidden flex flex-col">
+              <div className="p-4 border-b-2 border-pencil border-dashed flex justify-between items-center bg-white">
+                <h3 className="text-xl font-heading text-pencil">Select from Archive</h3>
+                <button
+                  onClick={() => setShowArchiveModal(false)}
+                  className="text-pencil hover:text-sketch-red font-bold"
+                >
+                  <Icons.X size={24} />
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                <Camera
+                  selectMode={true}
+                  onSelectPhoto={handleArchiveSelect}
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="max-w-md mx-auto w-full space-y-6">
           <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
             <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Your Reference</h2>
@@ -939,11 +969,21 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
               ) : (
                 <>
                   <div className="text-pencil mb-2"><Icons.Upload /></div>
-                  <p className="text-pencil font-hand text-xl">Tap to paste your sketch</p>
+                  <p className="text-pencil font-hand text-xl">Tap to upload your sketch</p>
                 </>
               )}
             </div>
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+
+            {/* From Archive Button */}
+            <button
+              onClick={() => setShowArchiveModal(true)}
+              className="w-full bg-white text-pencil py-3 rounded-xl font-bold text-lg font-hand border-2 border-pencil shadow-sketch hover:bg-sketch-yellow/20 transition-all flex items-center justify-center gap-2"
+            >
+              <Icons.Image size={20} />
+              Select from Archive
+            </button>
+
             <button onClick={runComparison} disabled={!userDrawing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all">Check Accuracy</button>
           </div>
         </div>

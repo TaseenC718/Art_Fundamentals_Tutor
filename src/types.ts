@@ -14,7 +14,7 @@ export interface LessonTopic {
   prompt: string;
 }
 
-export type AppMode = 'profile' | 'practice' | 'progress';
+export type AppMode = 'profile' | 'learn' | 'camera' | 'practice' | 'progress';
 
 export interface CritiqueRequest {
   image: string; // Base64

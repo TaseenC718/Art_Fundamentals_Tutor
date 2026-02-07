@@ -4,7 +4,10 @@ import { OrbitControls, Environment, useHelper, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import * as Icons from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
-import { compareDrawings, scanImageStructure, compareLineSets } from '../services/geminiService';
+import { compareDrawings, extractEdges, compareEdges, Edge } from '../services/geminiService';
+import { recordCritique, getDifficulty, DIFFICULTY_CONFIG } from '../services/storageService';
+import { savePhoto } from '../services/photoStorage';
+import Camera from './Camera';
 
 // --- Helper Functions for VP Calculation ---
 const HORIZON_Z = -100; // Far distance for horizon line
@@ -792,12 +795,12 @@ const LaserScanOverlay = () => {
                     100% { transform: translateY(100%); }
                 }
                 @keyframes scan-line {
-                    0% { top: 0%; opacity: 0; }
-                    10% { opacity: 1; }
-                    90% { opacity: 1; }
-                    100% { top: 100%; opacity: 0; }
+0 % { top: 0 %; opacity: 0; }
+10 % { opacity: 1; }
+90 % { opacity: 1; }
+100 % { top: 100 %; opacity: 0; }
                 }
-            `}</style>
+`}</style>
     </div>
   );
 };
@@ -818,13 +821,15 @@ const ImageCropper = ({ imageSrc, targetAspectRatio, targetWidth, targetHeight, 
   }, [imageSrc]);
 
   const handlePointerDown = (e: React.PointerEvent) => {
+    e.preventDefault(); // Prevent scrolling on touch
     setIsDragging(true);
     setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    containerRef.current?.setPointerCapture(e.pointerId);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
     if (!isDragging) return;
+    e.preventDefault();
     setPosition({
       x: e.clientX - dragStart.x,
       y: e.clientY - dragStart.y
@@ -833,7 +838,7 @@ const ImageCropper = ({ imageSrc, targetAspectRatio, targetWidth, targetHeight, 
 
   const handlePointerUp = (e: React.PointerEvent) => {
     setIsDragging(false);
-    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+    containerRef.current?.releasePointerCapture(e.pointerId);
   };
 
   const handleConfirm = () => {
@@ -909,13 +914,18 @@ const ImageCropper = ({ imageSrc, targetAspectRatio, targetWidth, targetHeight, 
         {/* We fix the viewport to the target Aspect Ratio using CSS aspect-ratio */}
         <div
           ref={containerRef}
-          className="relative bg-white overflow-hidden shadow-2xl border-4 border-sketch-blue border-dashed"
+          className="relative bg-white overflow-hidden shadow-2xl border-4 border-sketch-blue border-dashed cursor-move touch-none"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerLeave={handlePointerUp}
           style={{
             aspectRatio: `${targetAspectRatio}`,
             width: targetAspectRatio >= 1 ? '80%' : 'auto',
             height: targetAspectRatio < 1 ? '80%' : 'auto',
             maxHeight: '400px',
-            maxWidth: '100%'
+            maxWidth: '100%',
+            touchAction: 'none'
           }}
         >
           <img
@@ -923,20 +933,16 @@ const ImageCropper = ({ imageSrc, targetAspectRatio, targetWidth, targetHeight, 
             src={imageSrc}
             alt="crop target"
             draggable={false}
-            onPointerDown={handlePointerDown}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
             style={{
               transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
               transformOrigin: 'center',
-              cursor: isDragging ? 'grabbing' : 'grab',
               maxWidth: '100%',
               maxHeight: '100%',
               width: 'auto',
               height: 'auto',
               objectFit: 'contain',
               userSelect: 'none',
-              touchAction: 'none'
+              pointerEvents: 'none'
             }}
           />
         </div>
@@ -968,7 +974,60 @@ const ImageCropper = ({ imageSrc, targetAspectRatio, targetWidth, targetHeight, 
 
 type Step = 'pose' | 'draw' | 'crop' | 'result';
 
-const CritiqueZone: React.FC = () => {
+// Step indicator component
+const STEP_CONFIG = [
+  { key: 'pose', label: 'Set up your reference', icon: Icons.Box },
+  { key: 'draw', label: 'Upload your drawing', icon: Icons.Upload },
+  { key: 'result', label: 'See results', icon: Icons.CheckCircle }
+] as const;
+
+interface StepIndicatorProps {
+  currentStep: Step;
+}
+
+const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep }) => {
+  const currentIndex = STEP_CONFIG.findIndex(s => s.key === currentStep);
+
+  return (
+    <div className="flex items-center justify-center gap-1 md:gap-2 py-3 px-2 bg-paper border-b-2 border-pencil border-dashed">
+      {STEP_CONFIG.map((stepInfo, index) => {
+        const Icon = stepInfo.icon;
+        const isActive = index === currentIndex;
+        const isCompleted = index < currentIndex;
+
+        return (
+          <React.Fragment key={stepInfo.key}>
+            <div className={`flex items - center gap - 1 md: gap - 2 px - 2 md: px - 3 py - 1.5 rounded - lg transition - all ${isActive
+              ? 'bg-sketch-orange border-2 border-pencil shadow-sm transform -rotate-1'
+              : isCompleted
+                ? 'bg-sketch-blue/30 border-2 border-pencil/30'
+                : 'bg-paper border-2 border-pencil/20'
+              } `}>
+              <div className={`flex items - center justify - center w - 6 h - 6 rounded - full text - sm font - bold ${isActive ? 'bg-pencil text-paper' : isCompleted ? 'bg-sketch-blue text-pencil' : 'bg-pencil/20 text-pencil/50'
+                } `}>
+                {isCompleted ? <Icons.Check size={14} /> : index + 1}
+              </div>
+              <span className={`hidden md:block text - sm font - hand ${isActive ? 'text-pencil font-bold' : isCompleted ? 'text-pencil/70' : 'text-pencil/40'
+                } `}>
+                {stepInfo.label}
+              </span>
+            </div>
+            {index < STEP_CONFIG.length - 1 && (
+              <div className={`w - 4 md: w - 8 h - 0.5 ${index < currentIndex ? 'bg-sketch-blue' : 'bg-pencil/20'
+                } `} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+};
+
+interface CritiqueZoneProps {
+  difficulty?: 'beginner' | 'intermediate' | 'advanced';
+}
+
+const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp }) => {
   const [step, setStep] = useState<Step>('pose');
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referenceLines, setReferenceLines] = useState<string | null>(null);
@@ -977,14 +1036,8 @@ const CritiqueZone: React.FC = () => {
   const [tempUploadedImage, setTempUploadedImage] = useState<string | null>(null);
   const [triggerCapture, setTriggerCapture] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
-  const [lineSets, setLineSets] = useState<{
-    leftSet: { start: [number, number], end: [number, number] }[],
-    rightSet: { start: [number, number], end: [number, number] }[],
-    verticalSet: { start: [number, number], end: [number, number] }[],
-    refLeftSet: { start: [number, number], end: [number, number] }[],
-    refRightSet: { start: [number, number], end: [number, number] }[],
-    refVerticalSet: { start: [number, number], end: [number, number] }[]
-  }>({ leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] });
+  const [referenceEdges, setReferenceEdges] = useState<{ start: [number, number], end: [number, number], type: 'left' | 'right' | 'vertical' }[]>([]);
+  const [userEdges, setUserEdges] = useState<{ start: [number, number], end: [number, number], type: 'left' | 'right' | 'vertical' }[]>([]);
   const [grade, setGrade] = useState<string | null>(null);
 
   const [captureMeta, setCaptureMeta] = useState<{
@@ -1001,6 +1054,11 @@ const CritiqueZone: React.FC = () => {
   const [showRefVision, setShowRefVision] = useState(true);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState(0);
+  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [analysisError, setAnalysisError] = useState<{ type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string } | null>(null);
+  const [showGeminiVision, setShowGeminiVision] = useState(true);
 
   const [loadingMessage, setLoadingMessage] = useState('Analyzing perspective geometry...');
 
@@ -1011,12 +1069,65 @@ const CritiqueZone: React.FC = () => {
   const [cameraHeight, setCameraHeight] = useState(0);
 
   const [preset, setPreset] = useState('1pt');
-  const [showGuides, setShowGuides] = useState(true);
+  const [showGuides, setShowGuides] = useState(() => {
+    const difficulty = getDifficulty();
+    return DIFFICULTY_CONFIG[difficulty].showGuides;
+  });
+
+  // Update showGuides when difficulty changes
+  useEffect(() => {
+    if (difficultyProp) {
+      setShowGuides(DIFFICULTY_CONFIG[difficultyProp].showGuides);
+    }
+  }, [difficultyProp]);
+
+  // Loading phase messages
+  const LOADING_PHASES = [
+    "Analyzing your lines...",
+    "Checking convergence points...",
+    "Comparing with reference...",
+    "Generating feedback..."
+  ];
+
+  // Cycle through loading phases
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setLoadingPhase(0);
+      setLoadingStartTime(null);
+      setElapsedTime(0);
+      return;
+    }
+
+    setLoadingStartTime(Date.now());
+    setLoadingPhase(0);
+
+    const phaseInterval = setInterval(() => {
+      setLoadingPhase(prev => (prev + 1) % LOADING_PHASES.length);
+    }, 2500);
+
+    const timeInterval = setInterval(() => {
+      if (loadingStartTime) {
+        setElapsedTime(Math.floor((Date.now() - loadingStartTime) / 1000));
+      }
+    }, 1000);
+
+    return () => {
+      clearInterval(phaseInterval);
+      clearInterval(timeInterval);
+    };
+  }, [isAnalyzing, loadingStartTime]);
+
   const [cubePos, setCubePos] = useState<[number, number, number]>([0, 0, 0]);
   const [cubeRotation, setCubeRotation] = useState(0);
   const [interactionMode, setInteractionMode] = useState<'move' | 'rotate'>('move');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [showArchiveModal, setShowArchiveModal] = useState(false);
+
+  const handleArchiveSelect = (imageData: string) => {
+    setUserDrawing(imageData);
+    setShowArchiveModal(false);
+  };
 
   const handleCapture = (data: string, lines: string, analysis: string, meta?: any) => {
     setReferenceImage(data);
@@ -1044,63 +1155,59 @@ const CritiqueZone: React.FC = () => {
     }
   };
 
-  const handleCropConfirm = (croppedImage: string) => {
+  const handleCropConfirm = async (croppedImage: string) => {
+    // Save to archive
+    try {
+      await savePhoto(croppedImage);
+    } catch (e) {
+      console.error("Failed to archive photo", e);
+    }
+
     setUserDrawing(croppedImage);
     setTempUploadedImage(null);
-    runComparison(croppedImage); // Pass image directly to ensure state is ready? Or use useEffect.
-    // Actually, setting state is async. Better to trigger comparison via effect or pass data.
-    // The existing runComparison uses state `userDrawing`.
-    // Let's modify runComparison to accept optional arg.
+    setStep('draw'); // Return to draw step to show the image
   };
-
   const runComparison = async (overrideUserDrawing?: string) => {
     const drawingToUse = overrideUserDrawing || userDrawing;
     if (!referenceImage || !drawingToUse) return;
+    if (isAnalyzing) return; // Prevent double execution
+
     setIsAnalyzing(true);
-    // userDrawing state might not be updated yet if called from crop confirm
-    // so we assume drawingToUse is valid
-    if (drawingToUse !== userDrawing) setUserDrawing(drawingToUse);
-
+    setAnalysisError(null);
     setStep('result');
+    setReferenceEdges([]);
+    setUserEdges([]);
+
     try {
-      if (!referenceAnalysis) return;
+      // Single API call that handles everything
+      const result = await compareDrawings(referenceImage, drawingToUse);
 
-      // STEP 1: Scan Reference
-      setLoadingMessage("Step 1/3: Scanning Reference Model...");
-      // Use referenceImage (Solid) instead of referenceAnalysis (Wireframe) to ensure we only compare visible edges
-      const refResult = await scanImageStructure(referenceImage, "Reference Model");
-      setLineSets(prev => ({
-        ...prev,
-        refLeftSet: refResult.leftSet || [],
-        refRightSet: refResult.rightSet || [],
-        refVerticalSet: refResult.verticalSet || []
-      }));
+      if (!result.feedback || result.feedback.includes("Failed to compare")) {
+        setAnalysisError({ type: 'parse', message: 'Could not parse the AI response. Please try again.' });
+        setIsAnalyzing(false);
+        return;
+      }
 
-      // STEP 2: Scan User Drawing
-      setLoadingMessage("Step 2/3: Scanning Your Drawing...");
-      const userResult = await scanImageStructure(drawingToUse, "User Drawing");
-      setLineSets(prev => ({
-        ...prev,
-        leftSet: userResult.leftSet || [],
-        rightSet: userResult.rightSet || [],
-        verticalSet: userResult.verticalSet || []
-      }));
+      setAnalysis(result.feedback);
+      setGrade(result.grade);
+      setReferenceEdges(result.referenceEdges || []);
+      setUserEdges(result.userEdges || []);
+      recordCritique();
+    } catch (error: any) {
+      let errorInfo: { type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string };
 
-      // STEP 3: Compare
-      setLoadingMessage("Step 3/3: Comparing Geometry...");
-      const finalResult = await compareLineSets(refResult, userResult, `Perspective Mode: ${preset}`);
+      if (error?.message?.includes('network') || error?.message?.includes('fetch')) {
+        errorInfo = { type: 'network', message: 'Network error. Please check your connection and try again.' };
+      } else if (error?.message?.includes('timeout') || error?.name === 'AbortError') {
+        errorInfo = { type: 'timeout', message: 'Request timed out. The AI is taking too long to respond.' };
+      } else if (error?.message?.includes('JSON') || error?.message?.includes('parse')) {
+        errorInfo = { type: 'parse', message: 'Failed to parse AI response. Please try again.' };
+      } else {
+        errorInfo = { type: 'unknown', message: 'Something went wrong. Please try again.' };
+      }
 
-      console.log("AI Analysis Result:", finalResult); // DEBUG Log
-
-      setAnalysis(finalResult.feedback);
-      setGrade(finalResult.grade);
-
-      // Ensure local state matches final result if needed, but we populated it progressively above.
-
-    } catch (error) {
-      setAnalysis("Error analyzing images. Please try again.");
-      setLineSets({ leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] });
-      setGrade(null);
+      setAnalysisError(errorInfo);
+      setAnalysis(null);
     } finally {
       setIsAnalyzing(false);
     }
@@ -1114,9 +1221,12 @@ const CritiqueZone: React.FC = () => {
     setUserDrawing(null);
     setAnalysis(null);
     setGrade(null);
-    setLineSets({ leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] });
+    setReferenceEdges([]);
+    setUserEdges([]);
     setCaptureMeta({ vpLeft: null, vpRight: null, horizonY: null });
     setIsAnalyzing(false);
+    setAnalysisError(null);
+    setShowGeminiVision(true);
   };
 
   const handlePresetChange = (newPreset: string) => {
@@ -1151,6 +1261,7 @@ const CritiqueZone: React.FC = () => {
   if (step === 'pose') {
     return (
       <div className="h-full flex flex-col bg-paper relative">
+        <StepIndicator currentStep={step} />
         <div className="flex-1 w-full relative">
           <Canvas gl={{ preserveDrawingBuffer: true }}>
             <Suspense fallback={null}>
@@ -1307,63 +1418,143 @@ const CritiqueZone: React.FC = () => {
 
   if (step === 'draw') {
     return (
-      <div className="h-full flex flex-col bg-paper p-4 md:p-6 overflow-y-auto">
-        <div className="max-w-md mx-auto w-full space-y-6">
-          <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
-            <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Your Reference</h2>
-            <button onClick={resetFlow} className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline">Cancel</button>
-          </div>
-          <div className="bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil">
-            <div className="bg-white border-2 border-pencil/10">
-              <img src={referenceImage!} alt="Reference" className="w-full aspect-[4/3] object-contain" />
-            </div>
-          </div>
-          <div className="space-y-4">
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-4 border-dashed rounded-lg p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative overflow-hidden h-48 ${userDrawing ? 'border-sketch-blue bg-sketch-blue/10' : 'border-pencil/30 hover:border-pencil hover:bg-sketch-yellow/20'}`}
-            >
-              {userDrawing ? (
-                <img src={userDrawing} className="absolute inset-0 w-full h-full object-contain p-2" alt="upload" />
-              ) : (
-                <>
-                  <div className="text-pencil mb-2"><Icons.Upload /></div>
-                  <p className="text-pencil font-hand text-xl">Tap to paste your sketch</p>
-                </>
+      <div className="h-full flex flex-col bg-paper overflow-y-auto">
+        <StepIndicator currentStep={step} />
+
+        {/* Loading Overlay */}
+        {isAnalyzing && (
+          <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
+            <div className="bg-paper w-full max-w-sm rounded-xl border-2 border-pencil shadow-sketch p-6 text-center">
+              <div className="animate-spin text-sketch-orange mb-4 flex justify-center">
+                <Icons.Loader size={48} />
+              </div>
+              <p className="font-hand text-xl text-pencil mb-2">{LOADING_PHASES[loadingPhase]}</p>
+              <div className="w-full bg-pencil/20 h-2 rounded-full overflow-hidden mb-3">
+                <div
+                  className="h-full bg-sketch-orange transition-all duration-500"
+                  style={{ width: `${((loadingPhase + 1) / LOADING_PHASES.length) * 100}%` }}
+                />
+              </div>
+              {elapsedTime >= 5 && (
+                <p className="text-sm text-pencil/60 font-hand">Elapsed: {elapsedTime}s</p>
+              )}
+              {elapsedTime >= 15 && (
+                <button
+                  onClick={() => {
+                    setIsAnalyzing(false);
+                    setAnalysisError({ type: 'timeout', message: 'Analysis cancelled. Try again?' });
+                  }}
+                  className="mt-4 px-4 py-2 bg-sketch-red text-pencil font-bold font-hand rounded-lg border-2 border-pencil hover:bg-sketch-red/80 transition-all"
+                >
+                  Cancel
+                </button>
               )}
             </div>
-            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-            <button onClick={() => runComparison()} disabled={!userDrawing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all">Check Accuracy</button>
+          </div>
+        )}
+
+        {/* Error Display */}
+        {analysisError && !isAnalyzing && (
+          <div className="mx-4 mt-4 p-4 bg-sketch-red/20 border-2 border-sketch-red rounded-lg">
+            <div className="flex items-start gap-3">
+              <Icons.AlertCircle className="text-sketch-red flex-shrink-0 mt-0.5" size={20} />
+              <div className="flex-1">
+                <p className="font-bold text-pencil font-hand">{analysisError.message}</p>
+                <button
+                  onClick={() => runComparison()}
+                  className="mt-2 px-4 py-1.5 bg-sketch-orange text-pencil font-bold font-hand text-sm rounded-lg border-2 border-pencil hover:shadow-sketch transition-all flex items-center gap-2"
+                >
+                  <Icons.RefreshCw size={14} />
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex-1 p-4 md:p-6">
+          {/* Archive Selection Modal */}
+          {showArchiveModal && (
+            <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
+              <div className="bg-paper w-full max-w-lg max-h-[90vh] rounded-xl border-2 border-pencil shadow-sketch overflow-hidden flex flex-col">
+                <div className="p-4 border-b-2 border-pencil border-dashed flex justify-between items-center bg-white">
+                  <h3 className="text-xl font-heading text-pencil">Select from Archive</h3>
+                  <button
+                    onClick={() => setShowArchiveModal(false)}
+                    className="text-pencil hover:text-sketch-red font-bold"
+                  >
+                    <Icons.X size={24} />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <Camera
+                    selectMode={true}
+                    onSelectPhoto={handleArchiveSelect}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="max-w-md mx-auto w-full space-y-6">
+            <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
+              <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Your Reference</h2>
+              <button onClick={resetFlow} className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline">Cancel</button>
+            </div>
+            <div className="bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil">
+              <div className="bg-white border-2 border-pencil/10">
+                <img src={referenceImage!} alt="Reference" className="w-full aspect-[4/3] object-contain" />
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div
+                onClick={() => fileInputRef.current?.click()}
+                className={`border-4 border-dashed rounded-lg p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative overflow-hidden h-48 ${userDrawing ? 'border-sketch-blue bg-sketch-blue/10' : 'border-pencil/30 hover:border-pencil hover:bg-sketch-yellow/20'}`}
+              >
+                {userDrawing ? (
+                  <img src={userDrawing} className="absolute inset-0 w-full h-full object-contain p-2" alt="upload" />
+                ) : (
+                  <>
+                    <div className="text-pencil mb-2"><Icons.Upload /></div>
+                    <p className="text-pencil font-hand text-xl">Tap to upload your sketch</p>
+                  </>
+                )}
+              </div>
+              <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+              {/* From Archive Button */}
+              <button
+                onClick={() => setShowArchiveModal(true)}
+                className="w-full bg-white text-pencil py-3 rounded-xl font-bold text-lg font-hand border-2 border-pencil shadow-sketch hover:bg-sketch-yellow/20 transition-all flex items-center justify-center gap-2"
+              >
+                <Icons.Image size={20} />
+                Select from Archive
+              </button>
+
+              <button onClick={() => runComparison()} disabled={!userDrawing || isAnalyzing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all flex items-center justify-center gap-2">
+                {isAnalyzing ? (
+                  <>
+                    <Icons.Loader className="animate-spin" size={24} />
+                    Analyzing...
+                  </>
+                ) : (
+                  'Check Accuracy'
+                )}
+              </button>
+            </div>
           </div>
         </div>
       </div>
     );
   }
 
-  if (step === 'crop' && tempUploadedImage) {
-    console.log('Capture Meta for Crop:', captureMeta);
+  if (step === 'crop') {
     return (
-      <div className="h-full flex flex-col bg-paper p-4 md:p-6 overflow-hidden">
-        <div className="max-w-4xl mx-auto w-full h-full flex flex-col space-y-4">
-          <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed shrink-0">
-            <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Crop Your Drawing</h2>
-            <button
-              onClick={() => {
-                setTempUploadedImage(null);
-                setStep('draw');
-              }}
-              className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline"
-            >
-              Cancel
-            </button>
-          </div>
-
-
-
-
-          <div className="flex-1 min-h-0 flex gap-4">
-            {/* Reference Image Column */}
-            <div className="w-1/3 bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil overflow-hidden flex flex-col">
+      <div className="h-full flex flex-col bg-paper overflow-y-auto">
+        <StepIndicator currentStep={step} />
+        <div className="flex-1 p-4 md:p-6 flex flex-col items-center">
+          <div className="max-w-4xl w-full flex flex-col md:flex-row gap-4 h-full min-h-[500px]">
+            {/* Reference Column */}
+            <div className="w-full md:w-1/3 bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil flex flex-col">
               <h3 className="font-hand font-bold text-center mb-2 text-pencil">Model Reference</h3>
               <div className="flex-1 relative bg-gray-50 border border-pencil/20 rounded">
                 <img
@@ -1378,7 +1569,7 @@ const CritiqueZone: React.FC = () => {
             {/* Cropper Column */}
             <div className="flex-1 bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil relative">
               <ImageCropper
-                imageSrc={tempUploadedImage}
+                imageSrc={tempUploadedImage!}
                 targetAspectRatio={(captureMeta.width && captureMeta.height) ? (captureMeta.width / captureMeta.height) : 1}
                 targetWidth={captureMeta.width}
                 targetHeight={captureMeta.height}
@@ -1394,172 +1585,115 @@ const CritiqueZone: React.FC = () => {
       </div>
     );
   }
+
   return (
-    <div className="h-full bg-paper p-4 md:p-6 overflow-y-auto">
-      <div className="max-w-4xl mx-auto w-full space-y-6">
-        <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
-          <h2 className="text-3xl font-heading text-pencil">Accuracy Report</h2>
-          <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline">New Practice</button>
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch">
-            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">Model</p>
-            <div className="relative w-full" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
-              <img src={referenceImage!} className="w-full h-full object-contain" alt="ref" />
-              {isAnalyzing && (
-                <LaserScanOverlay />
-              )}
-              {/* AI Reference Vision Layer (Detected Model Lines) */}
-              {showRefVision && (
-                <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1000 1000" preserveAspectRatio="none">
-                  {/* Left Set (Purple) */}
-                  {lineSets.refLeftSet && lineSets.refLeftSet.map((line, i) => (
-                    <line
-                      key={`rl-${i}`}
-                      x1={line.start[0]} y1={line.start[1]}
-                      x2={line.end[0]} y2={line.end[1]}
-                      stroke="#A020F0" strokeWidth="4" opacity="0.8" strokeLinecap="round" strokeDasharray="8,4"
-                    />
-                  ))}
-                  {/* Right Set (Gold) */}
-                  {lineSets.refRightSet && lineSets.refRightSet.map((line, i) => (
-                    <line
-                      key={`rr-${i}`}
-                      x1={line.start[0]} y1={line.start[1]}
-                      x2={line.end[0]} y2={line.end[1]}
-                      stroke="#FFD700" strokeWidth="4" opacity="0.8" strokeLinecap="round" strokeDasharray="8,4"
-                    />
-                  ))}
-                  {/* Vertical Set (Pink) */}
-                  {lineSets.refVerticalSet && lineSets.refVerticalSet.map((line, i) => (
-                    <line
-                      key={`rv-${i}`}
-                      x1={line.start[0]} y1={line.start[1]}
-                      x2={line.end[0]} y2={line.end[1]}
-                      stroke="#FF1493" strokeWidth="4" opacity="0.8" strokeLinecap="round" strokeDasharray="8,4"
-                    />
-                  ))}
-                </svg>
-              )}
+    <div className="h-full bg-paper overflow-y-auto flex flex-col">
+      <StepIndicator currentStep={step} />
+      <div className="flex-1 p-4 md:p-6">
+        <div className="max-w-2xl mx-auto w-full space-y-6">
+          <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
+            <h2 className="text-2xl md:text-3xl font-heading text-pencil">Accuracy Report</h2>
+            <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline flex items-center gap-1">
+              <Icons.Plus size={18} />
+              New Practice
+            </button>
+          </div>
+
+          {/* Images Grid - stacks on mobile */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+            {/* Reference Image with Edge Overlay */}
+            <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch">
+              <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Reference Model</p>
+              <div className="relative w-full h-48 md:h-56">
+                <img src={referenceImage!} className="w-full h-full object-contain" alt="ref" />
+                {/* Reference Edge Overlay */}
+                {showGeminiVision && referenceEdges.length > 0 && (
+                  <svg
+                    viewBox="0 0 1000 1000"
+                    className="absolute inset-0 w-full h-full pointer-events-none"
+                    preserveAspectRatio="xMidYMid meet"
+                  >
+                    {referenceEdges.map((edge, i) => (
+                      <line
+                        key={`ref-${i}`}
+                        x1={edge.start[0]} y1={edge.start[1]}
+                        x2={edge.end[0]} y2={edge.end[1]}
+                        stroke={edge.type === 'left' ? '#A020F0' : edge.type === 'right' ? '#FFD700' : '#FF1493'}
+                        strokeWidth="6"
+                        opacity="0.8"
+                        strokeLinecap="round"
+                      />
+                    ))}
+                  </svg>
+                )}
+              </div>
             </div>
-            {/* Ref Vision Toggle - Centered Below Image */}
-            <div className="flex justify-center mt-2">
-              <div className="text-xs font-hand text-pencil bg-paper/50 backdrop-blur p-1 rounded-full border border-pencil/50 w-fit px-3 shadow-sm hover:bg-paper transition-all">
-                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-blue transition-colors select-none">
-                  <input
-                    type="checkbox"
-                    checked={showRefVision}
-                    onChange={(e) => setShowRefVision(e.target.checked)}
-                    className="accent-sketch-blue cursor-pointer w-3 h-3"
-                  />
-                  <span>AI Ref Vision</span>
-                </label>
+
+            {/* User Drawing with Edge Overlay */}
+            <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch">
+              <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Your Drawing</p>
+              <div className="relative w-full h-48 md:h-56">
+                <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
+                {/* User Edge Overlay */}
+                {showGeminiVision && userEdges.length > 0 && (
+                  <svg
+                    viewBox="0 0 1000 1000"
+                    className="absolute inset-0 w-full h-full pointer-events-none"
+                    preserveAspectRatio="xMidYMid meet"
+                  >
+                    {userEdges.map((edge, i) => (
+                      <line
+                        key={`user-${i}`}
+                        x1={edge.start[0]} y1={edge.start[1]}
+                        x2={edge.end[0]} y2={edge.end[1]}
+                        stroke={edge.type === 'left' ? '#A020F0' : edge.type === 'right' ? '#FFD700' : '#FF1493'}
+                        strokeWidth="6"
+                        opacity="0.8"
+                        strokeLinecap="round"
+                      />
+                    ))}
+                  </svg>
+                )}
               </div>
             </div>
           </div>
-          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch relative group">
 
-            <div className="hidden">
-              <div className="flex justify-center text-xs font-hand text-pencil bg-paper/80 backdrop-blur p-1 rounded-full border border-pencil mx-auto w-fit px-4 shadow-sm">
-                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-orange transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={showAIVision}
-                    onChange={(e) => setShowAIVision(e.target.checked)}
-                    className="accent-sketch-orange cursor-pointer"
-                  />
-                  <span>AI Vision (Detected)</span>
-                </label>
-
-              </div>
-              <div className="flex justify-center text-xs font-hand text-pencil bg-paper/80 backdrop-blur p-1 rounded-full border border-pencil mx-auto w-fit px-4 shadow-sm">
-                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-blue transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={showRefVision}
-                    onChange={(e) => setShowRefVision(e.target.checked)}
-                    className="accent-sketch-blue cursor-pointer"
-                  />
-                  <span>AI Ref (Model)</span>
-                </label>
-              </div>
-            </div>
-
-            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">Your Drawing</p>
-            <div className="relative w-full" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
-              <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
-
-              {/* Scanning Effect while analyzing */}
-              {isAnalyzing && <LaserScanOverlay />}
-
-              {/* AI Vision Layer (Detected Lines) */}
-              {showAIVision && (
-                <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1000 1000" preserveAspectRatio="none">
-                  {/* Left Set (Cyan) */}
-                  {lineSets.leftSet && lineSets.leftSet.map((line, i) => (
-                    <line
-                      key={`l-${i}`}
-                      x1={line.start[0]} y1={line.start[1]}
-                      x2={line.end[0]} y2={line.end[1]}
-                      stroke="cyan" strokeWidth="4" opacity="0.8" strokeLinecap="round"
-                    />
-                  ))}
-                  {/* Right Set (Orange) */}
-                  {lineSets.rightSet && lineSets.rightSet.map((line, i) => (
-                    <line
-                      key={`r-${i}`}
-                      x1={line.start[0]} y1={line.start[1]}
-                      x2={line.end[0]} y2={line.end[1]}
-                      stroke="orange" strokeWidth="4" opacity="0.8" strokeLinecap="round"
-                    />
-                  ))}
-                  {/* Vertical Set (Green) */}
-                  {lineSets.verticalSet && lineSets.verticalSet.map((line, i) => (
-                    <line
-                      key={`v-${i}`}
-                      x1={line.start[0]} y1={line.start[1]}
-                      x2={line.end[0]} y2={line.end[1]}
-                      stroke="#32CD32" strokeWidth="4" opacity="0.8" strokeLinecap="round"
-                    />
-                  ))}
-                </svg>
-              )}
-
-
-            </div>
-            {/* AI Vision Toggle - Centered Below Image */}
-            <div className="flex justify-center mt-2">
-              <div className="text-xs font-hand text-pencil bg-paper/50 backdrop-blur p-1 rounded-full border border-pencil/50 w-fit px-3 shadow-sm hover:bg-paper transition-all">
-                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-orange transition-colors select-none">
-                  <input
-                    type="checkbox"
-                    checked={showAIVision}
-                    onChange={(e) => setShowAIVision(e.target.checked)}
-                    className="accent-sketch-orange cursor-pointer w-3 h-3"
-                  />
-                  <span>AI Vision</span>
-                </label>
-              </div>
-            </div>
+          {/* Gemini Vision Toggle */}
+          <div className="flex justify-center">
+            <label className="flex items-center gap-2 cursor-pointer bg-white px-4 py-2 rounded-sm border-2 border-pencil shadow-sketch">
+              <input
+                type="checkbox"
+                checked={showGeminiVision}
+                onChange={(e) => setShowGeminiVision(e.target.checked)}
+                className="w-4 h-4 rounded border-2 border-pencil accent-sketch-blue"
+              />
+              <span className="text-sm font-bold font-hand text-pencil">Gemini Vision</span>
+            </label>
           </div>
-        </div>
-        <div className="bg-paper rounded-sm shadow-sketch border-2 border-pencil p-6 min-h-[300px] relative">
-          <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-sketch-yellow border-2 border-pencil z-0"></div>
-          <div className="absolute -bottom-3 -right-3 w-12 h-12 rounded-full bg-sketch-blue border-2 border-pencil z-0"></div>
 
-          <div className="relative z-10">
-            {isAnalyzing ? (
-              <div className="flex flex-col items-center justify-center h-48 gap-4 text-pencil">
-                <div className="animate-spin text-sketch-orange"><Icons.Loader /></div>
-                <p className="font-hand text-xl animate-pulse text-center">
-                  {loadingMessage}
-                </p>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-4">
-                {grade && (
-                  <div className="flex justify-center">
-                    <div className={`
+          <div className="bg-paper rounded-sm shadow-sketch border-2 border-pencil p-6 min-h-[300px] relative">
+            <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-sketch-yellow border-2 border-pencil z-0"></div>
+            <div className="absolute -bottom-3 -right-3 w-12 h-12 rounded-full bg-sketch-blue border-2 border-pencil z-0"></div>
+
+            <div className="relative z-10">
+              {isAnalyzing ? (
+                <div className="flex flex-col items-center justify-center h-48 gap-6 text-pencil">
+                  {/* Spinner */}
+                  <div className="animate-spin text-sketch-orange"><Icons.Loader size={48} /></div>
+
+                  {/* Status Text */}
+                  <div className="text-center">
+                    <p className="font-hand text-xl">Analyzing with Gemini AI...</p>
+                    <p className="font-hand text-sm text-pencil/60 mt-2">
+                      Detecting edges and comparing perspective accuracy
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4">
+                  {grade && (
+                    <div className="flex justify-center">
+                      <div className={`
                       w-16 h-16 rounded-full flex items-center justify-center border-4 border-pencil shadow-sketch transform -rotate-3
                       ${grade === 'A' ? 'bg-green-400 text-white' : ''}
                       ${grade === 'B' ? 'bg-blue-400 text-white' : ''}
@@ -1567,36 +1701,37 @@ const CritiqueZone: React.FC = () => {
                       ${grade === 'D' ? 'bg-orange-400 text-white' : ''}
                       ${grade === 'F' ? 'bg-red-500 text-white' : ''}
                     `}>
-                      <span className="font-heading text-4xl">{grade}</span>
+                        <span className="font-heading text-4xl">{grade}</span>
+                      </div>
                     </div>
-                  </div>
-                )}
-                <MarkdownRenderer content={analysis || "No analysis available."} className="font-hand text-lg" />
+                  )}
+                  <MarkdownRenderer content={analysis || "No analysis available."} className="font-hand text-lg" />
 
-                {/* Technical Details Section */}
-                <details className="mt-4 border-t-2 border-pencil/20 pt-2">
-                  <summary className="cursor-pointer font-bold font-hand text-pencil/60 hover:text-pencil flex items-center gap-2">
-                    <Icons.Info size={16} /> Technical Analysis Data
-                  </summary>
-                  <div className="mt-2 text-xs font-mono bg-black/5 p-2 rounded text-pencil/80 overflow-x-auto">
-                    <p><strong>Mode:</strong> {preset}</p>
-                    <p><strong>Camera:</strong> Depth: {cubeDepth}, Lens: {fov}</p>
-                    <div className="my-1 border-b border-pencil/10"></div>
-                    <p><strong>Ground Truth Geometry:</strong></p>
-                    <ul className="list-disc pl-4">
-                      <li>X-Edges (Horizontal/Left): {captureMeta.edgesX?.length || 0}</li>
-                      <li>Z-Edges (Depth/Right): {captureMeta.edgesZ?.length || 0}</li>
-                      <li>VP Left: {captureMeta.vpLeft ? `[${Math.round(captureMeta.vpLeft[0])}, ${Math.round(captureMeta.vpLeft[1])}]` : 'N/A'}</li>
-                      <li>VP Right: {captureMeta.vpRight ? `[${Math.round(captureMeta.vpRight[0])}, ${Math.round(captureMeta.vpRight[1])}]` : 'N/A'}</li>
-                    </ul>
-                  </div>
-                </details>
-              </div>
-            )}
+                  {/* Technical Details Section */}
+                  <details className="mt-4 border-t-2 border-pencil/20 pt-2">
+                    <summary className="cursor-pointer font-bold font-hand text-pencil/60 hover:text-pencil flex items-center gap-2">
+                      <Icons.Info size={16} /> Technical Analysis Data
+                    </summary>
+                    <div className="mt-2 text-xs font-mono bg-black/5 p-2 rounded text-pencil/80 overflow-x-auto">
+                      <p><strong>Mode:</strong> {preset}</p>
+                      <p><strong>Camera:</strong> Depth: {cubeDepth}, Lens: {fov}</p>
+                      <div className="my-1 border-b border-pencil/10"></div>
+                      <p><strong>Ground Truth Geometry:</strong></p>
+                      <ul className="list-disc pl-4">
+                        <li>X-Edges (Horizontal/Left): {captureMeta.edgesX?.length || 0}</li>
+                        <li>Z-Edges (Depth/Right): {captureMeta.edgesZ?.length || 0}</li>
+                        <li>VP Left: {captureMeta.vpLeft ? `[${Math.round(captureMeta.vpLeft[0])}, ${Math.round(captureMeta.vpLeft[1])}]` : 'N/A'}</li>
+                        <li>VP Right: {captureMeta.vpRight ? `[${Math.round(captureMeta.vpRight[0])}, ${Math.round(captureMeta.vpRight[1])}]` : 'N/A'}</li>
+                      </ul>
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
-    </div >
+    </div>
   );
 };
 

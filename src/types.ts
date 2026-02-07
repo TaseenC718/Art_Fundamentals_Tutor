@@ -6,9 +6,15 @@ export interface Message {
   timestamp: number;
 }
 
+export interface LessonTopic {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  prompt: string;
+}
 
-
-export type AppMode = 'practice' | 'progress';
+export type AppMode = 'profile' | 'learn' | 'camera' | 'practice' | 'progress';
 
 export interface CritiqueRequest {
   image: string; // Base64

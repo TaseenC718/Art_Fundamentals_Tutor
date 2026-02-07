@@ -1,32 +1,32 @@
 import { GoogleGenerativeAI, Content, Part } from "@google/generative-ai";
+import { getDifficulty, Difficulty } from './storageService';
 
 // Initialize the client
 const genAI = new GoogleGenerativeAI(import.meta.env.VITE_GEMINI_API_KEY);
 
 const MODEL_NAME = 'gemini-3-flash-preview';
-const FALLBACK_MODEL_NAME = 'gemini-2.5-flash';
 
-// Helper to check if error is a rate limit error
-const isRateLimitError = (error: unknown): boolean => {
-  return error instanceof Error && error.message.includes('429');
+// Feedback instructions based on difficulty
+const FEEDBACK_INSTRUCTIONS: Record<Difficulty, string> = {
+  beginner: `
+    Provide DETAILED, encouraging feedback for a beginner:
+    - Explain WHY certain lines should converge
+    - Point out what they did WELL first
+    - Give step-by-step guidance on fixing issues
+    - Use simple language, avoid jargon
+    - Be encouraging and supportive`,
+  intermediate: `
+    Provide BALANCED feedback:
+    - Note strengths and areas for improvement
+    - Give specific, actionable advice
+    - Reference perspective principles briefly`,
+  advanced: `
+    Provide CONCISE, technical feedback:
+    - Skip basics, focus on subtle errors
+    - Use technical terminology
+    - Brief, direct critique
+    - Challenge them to refine details`
 };
-
-export interface LineSegment {
-  start: [number, number];
-  end: [number, number];
-}
-
-export interface GeometricScanResult {
-  leftSet: LineSegment[];
-  rightSet: LineSegment[];
-  verticalSet: LineSegment[];
-}
-
-export interface GradingResult {
-  grade: string;
-  feedback: string;
-  thought_process?: string;
-}
 
 /**
  * Sends a text message to the chat model.
@@ -60,21 +60,37 @@ export const sendMessageToGemini = async (
   }
 };
 
+// Critique style based on difficulty
+const CRITIQUE_STYLE: Record<Difficulty, string> = {
+  beginner: `Be encouraging and educational. Start by noting what they did well. Explain concepts simply - avoid jargon like "station point" without explanation. Give step-by-step guidance. Use phrases like "A helpful trick is..." or "Try this next time..."`,
+  intermediate: `Balance praise with constructive criticism. Reference perspective principles (vanishing points, convergence) but briefly explain when needed. Be specific about what to fix and how.`,
+  advanced: `Be concise and technical. Skip basic explanations - they know the theory. Focus on subtle errors: slight convergence drift, minor proportion issues, line quality. Challenge them to refine details. Direct and efficient.`
+};
+
 /**
  * Generates a critique for an uploaded image.
  */
 export const generateCritique = async (imageBase64: string, userQuestion: string): Promise<string> => {
   try {
+    const difficulty = getDifficulty();
+    const critiqueStyle = CRITIQUE_STYLE[difficulty];
+
     const model = genAI.getGenerativeModel({
       model: MODEL_NAME,
-      systemInstruction: "You are an expert Art Tutor. You analyze geometric drawings with simple, clear language. Avoid mathematical jargon. Focus on 'flow', 'direction', and 'slant'."
+      systemInstruction: `You are a Perspective Expert. You analyze drawings of cubes and geometric shapes for mathematical and visual accuracy. You are strict about parallel vertical lines (in 1 and 2 point perspective) and convergence.
+
+Style guidance: ${critiqueStyle}`
     });
 
     const base64Data = imageBase64.split(',')[1] || imageBase64;
 
-    const prompt = userQuestion
-      ? `Critique this perspective drawing. Focus on: ${userQuestion}. Analyze vanishing points and lines naturally. No math terms.`
-      : "Critique this perspective drawing of cubes. Check if lines converge nicely. Check for distortion. Give 3 actionable tips to improve the 3D solidity. Use simple art terms.";
+    const basePrompt = userQuestion
+      ? `Critique this perspective drawing. Focus on: ${userQuestion}. Analyze vanishing points, parallel lines, convergence, and cube proportions.`
+      : "Critique this perspective drawing of cubes. Check if lines converge correctly to vanishing points. Check for distortion (e.g., 'fish-eye' effect or forced perspective). Give 3 actionable tips to improve the 3D solidity of the form.";
+
+    const prompt = `${basePrompt}
+
+Remember to match your response style to the student's level: ${critiqueStyle}`;
 
     const result = await model.generateContent([
       prompt,
@@ -89,315 +105,287 @@ export const generateCritique = async (imageBase64: string, userQuestion: string
   }
 };
 
+// Edge type definition
+export type Edge = { start: [number, number], end: [number, number], type: 'left' | 'right' | 'vertical' };
+
 /**
- * Scans a single image to extract perspective structure.
+ * Extracts cube edges from a single image.
+ * Used for step-by-step edge detection.
  */
-export const scanImageStructure = async (
-  imageBase64: string,
-  label: "Reference Model" | "User Drawing"
-): Promise<GeometricScanResult> => {
-  const base64Data = imageBase64.split(',')[1] || imageBase64;
+export const extractEdges = async (imageBase64: string, imageType: 'reference' | 'drawing'): Promise<Edge[]> => {
+  try {
+    const model = genAI.getGenerativeModel({
+      model: MODEL_NAME,
+      generationConfig: { responseMimeType: "application/json" },
+      systemInstruction: "You are a Perspective Geometry Analyzer. Extract the visible edges of a cube from an image with precise coordinates."
+    });
 
-  const prompt = `
-    Analyze this ${label}.
-    Task: Identify the structural edges of the CUBE form.
-    
-    Stats:
-    - Image Type: ${label === "User Drawing" ? "Hand-drawn sketch (Pencil/Ink)" : "3D Render (High Contrast Wireframe)"}
-    - Goal: Extract ONLY the lines that define the cube's structure.
-    
-    For 3D Render (Reference):
-    - The lines are perfect, high-contrast black pixels on white.
-    - SNAP EXACTLY to the pixel line centers.
-    - Do not "hallucinate" curves. These are straight lines.
-    - Consistency is key.
-    
-    For User Drawing:
-    - Ignore erasings, smudges, or grid lines.
-    - LOOK FOR DARK, DEFINITE STROKES.
-    - Connect broken lines if they clearly form a single edge.
-    
-    Categorize lines into:
-    - leftSet: Lines converging to Left VP (or Horizontal in 1pt).
-    - rightSet: Lines converging to Right VP (or Depth in 1pt).
-    - verticalSet: Vertical lines (Y-axis).
-    
-    Return JSON:
-    {
-      "leftSet": [ { "start": [x, y], "end": [x, y] }, ... ],
-      "rightSet": [ ... ],
-      "verticalSet": [ ... ]
-    }
-    
-    Coordinate System:
-    - [0, 0] is Top-Left corner of the image.
-    - [1000, 1000] is Bottom-Right corner.
-    - Normalize all points to this 1000x1000 space regardless of aspect ratio.
-  `;
+    const imageData = imageBase64.split(',')[1] || imageBase64;
 
-  const contentPayload = [
-    prompt,
-    { inlineData: { mimeType: 'image/png', data: base64Data } }
-  ];
+    const prompt = `
+      Extract the VISIBLE cube edges from this ${imageType === 'reference' ? '3D rendered cube' : 'hand-drawn cube'}.
 
-  const modelsToTry = [MODEL_NAME, FALLBACK_MODEL_NAME];
+      Instructions:
+      - Identify each visible corner of the cube first
+      - Draw edges from corner to corner with PRECISE coordinates
+      - Categorize each edge:
+        - **left**: Edges receding toward left vanishing point
+        - **right**: Edges receding toward right vanishing point
+        - **vertical**: Vertical edges (parallel in 2-point perspective)
+      
+      ONLY include edges that are actually visible (typically 9 edges).
+      Do NOT include hidden/occluded edges.
 
-  for (const modelName of modelsToTry) {
+      Return JSON:
+      {
+        "edges": [
+          { "start": [x1, y1], "end": [x2, y2], "type": "left" | "right" | "vertical" }
+        ]
+      }
+
+      Coordinates: Normalize to [0-1000] range (0,0 = top-left, 1000,1000 = bottom-right).
+      Be EXACT - edges should connect at shared corners.
+    `;
+
+    const result = await model.generateContent([
+      prompt,
+      { inlineData: { mimeType: 'image/png', data: imageData } }
+    ]);
+    const response = await result.response;
+    const text = response.text();
+
     try {
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig: { responseMimeType: "application/json" }
-      });
-      const result = await model.generateContent(contentPayload);
-      const data = JSON.parse(result.response.text());
-      return {
-        leftSet: data.leftSet || [],
-        rightSet: data.rightSet || [],
-        verticalSet: data.verticalSet || []
-      };
-    } catch (e) {
-      console.warn(`Scan failed on ${modelName}`, e);
-      if (modelName === FALLBACK_MODEL_NAME) throw e;
+      const data = JSON.parse(text);
+      return data.edges || [];
+    } catch {
+      console.error("Failed to parse edges JSON:", text);
+      return [];
     }
+  } catch (error) {
+    console.error("Edge extraction error:", error);
+    return [];
   }
-  return { leftSet: [], rightSet: [], verticalSet: [] };
 };
 
 /**
- * Compares two already-scanned geometric sets.
+ * Compares pre-extracted edges and returns a grade and feedback.
  */
-export const compareLineSets = async (
-  refSet: GeometricScanResult,
-  userSet: GeometricScanResult,
-  context?: string
-): Promise<GradingResult> => {
-  const model = genAI.getGenerativeModel({
-    model: MODEL_NAME,
-    generationConfig: { responseMimeType: "application/json" }
-  });
-
-  const prompt = `
-    COMPARE these two geometric datasets.
-    
-    CONTEXT: ${context || "General Perspective Drawing"}
-    
-    Reference Data (Ground Truth - PERFECT 3D MODEL):
-    ${JSON.stringify(refSet)}
-    
-    User Data (Hand-drawn Attempt):
-    ${JSON.stringify(userSet)}
-    
-    **Task & Rules**:
-    1. **THE REFERENCE IS LAW**: The "Reference Data" comes from a perfect 3D engine. It is the absolute correct answer.
-    2. **COMPARE SLOPE/ANGLE**: Check if the User's lines match the SLOPE of the Reference lines.
-    3. **IGNORE POSITION**: A user can draw the cube slightly to the left or right. That is OKAY.
-    4. **STRICT ON ANGLES**: If a User line is horizontal, but the Reference line is angled, that is a FAIL (Wrong perspective type).
-    5. **PENALIZE DIVERGENCE**: If the user's lines do not converge to the same VP area as the reference, deduct points heavily.
-    
-    **Grading Scale**:
-    - **A (Excellent)**: Angles match the reference almost perfectly. Perspective is accurate.
-    - **B (Good)**: General shape is correct, but some lines have slight angle errors.
-    - **C (Average)**: Noticeable perspective errors. Lines are parallel when they should converge (or vice-versa).
-    - **D (Poor)**: Significant distortion. The drawing does not look like the reference model's perspective.
-    - **F (Fail)**: Completely wrong perspective type (e.g. drawing 2-point when reference is 1-point).
-
-    **TONE GUIDE**:
-    - Be strict but constructive (like a serious Art Professor).
-    - Point out *specific* lines that are wrong (e.g. "Your vertical lines are tilting").
-    - **FORBIDDEN WORDS**: Vector, Orthogonal, Cartesian, Co-linear, Delta, Slope.
-    - **PREFERRED WORDS**: Slant, Angle, Direction, Flow, Going back, Converging, Steepness.
-    
-    Return JSON:
-    {
-      "thought_process": "Critically analyze match between Reference (Truth) and User (Attempt).",
-      "grade": "A/B/C/D/F",
-      "feedback": "Markdown feedback. specific and tough on accuracy."
-    }
-  `;
-
+export const compareEdges = async (
+  referenceEdges: Edge[],
+  userEdges: Edge[],
+  referenceImage: string,
+  userDrawing: string
+): Promise<{ grade: string, feedback: string }> => {
   try {
-    const result = await model.generateContent(prompt);
-    return JSON.parse(result.response.text());
-  } catch (e) {
-    console.error("Comparison Logic Error", e);
-    return { grade: "C", feedback: "Error during comparison." };
+    const model = genAI.getGenerativeModel({
+      model: MODEL_NAME,
+      generationConfig: { responseMimeType: "application/json" },
+      systemInstruction: "You are a Perspective Expert. Compare two sets of cube edges and provide a grade and feedback."
+    });
+
+    const difficulty = getDifficulty();
+    const feedbackStyle = FEEDBACK_INSTRUCTIONS[difficulty];
+
+    const refData = referenceImage.split(',')[1] || referenceImage;
+    const userData = userDrawing.split(',')[1] || userDrawing;
+
+    const prompt = `
+      Compare these cube drawings based on the detected edges.
+
+      Reference Edges: ${JSON.stringify(referenceEdges)}
+      User Edges: ${JSON.stringify(userEdges)}
+
+      Grade the user's perspective accuracy:
+      - **A**: Excellent accuracy, lines converge properly
+      - **B**: Good with minor issues
+      - **C**: Acceptable but noticeable errors
+      - **D**: Significant perspective problems
+      - **F**: Major fundamental errors
+
+      ${feedbackStyle}
+
+      Structure feedback as:
+      - **Grade**: [Letter]
+      - **What's Working**: 1-2 specific strengths
+      - **Focus On**: 1-2 specific improvements
+
+      Return JSON:
+      {
+        "grade": "A" | "B" | "C" | "D" | "F",
+        "feedback": "Markdown string with grade and feedback"
+      }
+    `;
+
+    const result = await model.generateContent([
+      "Reference Image:",
+      { inlineData: { mimeType: 'image/png', data: refData } },
+      "User Drawing:",
+      { inlineData: { mimeType: 'image/png', data: userData } },
+      prompt
+    ]);
+    const response = await result.response;
+    const text = response.text();
+
+    try {
+      const data = JSON.parse(text);
+      return { grade: data.grade || 'C', feedback: data.feedback || '' };
+    } catch {
+      return { grade: 'C', feedback: text };
+    }
+  } catch (error) {
+    console.error("Compare edges error:", error);
+    return { grade: 'F', feedback: "Failed to compare. Please try again." };
   }
 };
 
 /**
  * Compares a user's drawing with a reference image.
- * @deprecated Use scanImageStructure + compareLineSets instead.
+ * Returns detected edges for both images and a letter grade.
  */
-export const compareDrawings = async (
-  referenceImage: string,
-  userDrawing: string,
-  meta?: {
-    edgesX?: number[][],
-    edgesZ?: number[][],
-    vpLeft?: number[] | null,
-    vpRight?: number[] | null
-  },
-  onStream?: (text: string) => void
-): Promise<{
+export const compareDrawings = async (referenceImage: string, userDrawing: string): Promise<{
   grade: string,
   feedback: string,
-  leftSet: { start: [number, number], end: [number, number] }[],
-  rightSet: { start: [number, number], end: [number, number] }[],
-  verticalSet: { start: [number, number], end: [number, number] }[]
-  refLeftSet: { start: [number, number], end: [number, number] }[],
-  refRightSet: { start: [number, number], end: [number, number] }[],
-  refVerticalSet: { start: [number, number], end: [number, number] }[],
-  thought_process?: string,
+  referenceEdges: { start: [number, number], end: [number, number], type: 'left' | 'right' | 'vertical' }[],
+  userEdges: { start: [number, number], end: [number, number], type: 'left' | 'right' | 'vertical' }[]
 }> => {
-  const refData = referenceImage.split(',')[1] || referenceImage;
-  const userData = userDrawing.split(',')[1] || userDrawing;
+  try {
+    const model = genAI.getGenerativeModel({
+      model: MODEL_NAME,
+      generationConfig: { responseMimeType: "application/json" },
+      systemInstruction: "You are a specialized Perspective Geometry Analyzer. Your job is to extract and compare the key structural lines from both a reference cube and a user's drawing, then grade the accuracy."
+    });
 
-  let groundTruthPrompt = "";
-  if (meta) {
-    groundTruthPrompt = `
-    **GROUND TRUTH DATA (The Correct Answer)**:
-    - This is the exact screen-space geometry of the reference cube.
-    - X-Axis Edges (should converge to one VP in 2pt, or be horizontal in 1pt): ${JSON.stringify(meta.edgesX)}
-    - Z-Axis Edges (should converge to Depth VP): ${JSON.stringify(meta.edgesZ)}
-    
-    **Comparison Logic**:
-    1. IGNORE the reference image styles. Look only at the GEOMETRY.
-    2. Compare the USER'S drawn lines to the GROUND TRUTH lines above.
-    3. If the user's angles match the Ground Truth, they get a high grade.
-    4. If the user drew a 2-point cube (angled X-edges) but the Ground Truth is a 1-point cube (horizontal X-edges), they have FAILED the perspective type. Grade = D or F.
+    const refData = referenceImage.split(',')[1] || referenceImage;
+    const userData = userDrawing.split(',')[1] || userDrawing;
+
+    const difficulty = getDifficulty();
+    const feedbackStyle = FEEDBACK_INSTRUCTIONS[difficulty];
+
+    const prompt = `
+      Analyze BOTH images and extract their cube edges with PRECISE coordinates.
+
+      ## Step 1: Extract Reference Edges (Image 1 - 3D Rendered Cube)
+      The reference is a clean 3D rendered cube. Extract EXACTLY the visible edges:
+      - Identify each corner of the cube first (there should be 6-8 visible corners)
+      - Draw edges from corner to corner, not approximations
+      - **left**: Edges that recede toward the left vanishing point (typically top-left and bottom-left faces)
+      - **right**: Edges that recede toward the right vanishing point (typically top-right and bottom-right faces)
+      - **vertical**: Perfectly vertical edges connecting top and bottom corners
+      
+      BE PRECISE: Place start/end coordinates exactly at the cube's corners, not near them.
+
+      ## Step 2: Extract User Edges (Image 2 - Hand Drawing)
+      Identify the drawn edges the same way. Look for the strongest, darkest lines.
+
+      ## Step 3: Compare & Grade
+      Compare how well the user's edges match the reference:
+      - **A** (90-100): Excellent perspective accuracy, lines converge properly
+      - **B** (80-89): Good perspective with minor issues
+      - **C** (70-79): Acceptable but noticeable errors
+      - **D** (60-69): Significant perspective problems
+      - **F** (below 60): Major fundamental errors
+
+      ## Step 4: Feedback
+      ${feedbackStyle}
+
+      Structure feedback as:
+      - **Grade**: [Letter]
+      - **What's Working**: 1-2 specific strengths
+      - **Focus On**: 1-2 specific improvements
+
+      Return JSON:
+      {
+        "grade": "A" | "B" | "C" | "D" | "F",
+        "feedback": "Markdown string with grade and feedback",
+        "referenceEdges": [
+          { "start": [x1, y1], "end": [x2, y2], "type": "left" | "right" | "vertical" }
+        ],
+        "userEdges": [
+          { "start": [x1, y1], "end": [x2, y2], "type": "left" | "right" | "vertical" }
+        ]
+      }
+
+      COORDINATE RULES:
+      - Normalize to [0-1000] range (0,0 = top-left, 1000,1000 = bottom-right)
+      - Be EXACT - edges should connect at shared corners
+      - ONLY include edges that are actually visible in the image (typically 9 edges for a cube viewed from an angle)
+      - Do NOT include hidden/occluded edges
     `;
-  }
 
-  const prompt = `
-    PERFORM A DUAL-IMAGE ANALYSIS WITH CHAIN-OF-THOUGHT REASONING.
-    
-    **Task**:
-    1. **Analyze Image 1 (Reference)**: Identify the structural edges of the 3D Model.
-       - **MANDATORY**: You MUST extract the actual lines from this image for the "ref" sets.
-    2. **Analyze Image 2 (User Drawing)**: Identify the structural edges of the user's sketch.
-    3. **Compare Geometry (Flow & Direction)**: 
-       - Check if the User's lines follow the same path/slant as the Reference lines.
-       - **CRITICAL**: Ignore position offsets (translation). Only penalize if the LINE DIRECTIONS diverge.
-    
-    **Grading Scale**:
-    - **A (Excellent)**: Lines flow perfectly to the vanishing points.
-    - **B (Good)**: Minor wobbles but general direction is correct.
-    - **C (Average)**: Some lines go the wrong way.
-    - **D/F (Fail)**: Completely wrong perspective type.
+    const result = await model.generateContent([
+      "Reference Image (3D Model):",
+      { inlineData: { mimeType: 'image/png', data: refData } },
+      "User's Drawing:",
+      { inlineData: { mimeType: 'image/png', data: userData } },
+      prompt
+    ]);
+    const response = await result.response;
+    const text = response.text();
 
-    **TONE GUIDE**:
-    - Speak like an encouraging Art Teacher.
-    - **FORBIDDEN WORDS**: Vector, Orthogonal, Cartesian, Co-linear, Delta, Slope, Degrees.
-    - **PREFERRED WORDS**: Slant, Angle, Direction, Flow, Going back, Converging, Steepness.
-    - Keep it simple and visual.
-
-    Return JSON:
-    {
-      "thought_process": "Explain: 1. Ref Image Structure found. 2. User Image Structure found. 3. Comparison logic.",
-      "grade": "A",
-      "feedback": "Markdown string. Compare the User's lines to the Reference lines detected.",
-      "leftSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
-      "rightSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
-      "verticalSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
-      "refLeftSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
-      "refRightSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ],
-      "refVerticalSet": [ { "start": [x1, y1], "end": [x2, y2] }, ... ]
-    }
-    
-    - Coordinate System: Top-Left=[0,0], Bottom-Right=[1000,1000] relative to the image dimensions.
-    - **Verify output**: Ensure "refLeftSet" etc. are NOT EMPTY if lines exist in Image 1.
-  `;
-
-  const contentPayload = [
-    "Reference Image (Wireframe Geometry):",
-    { inlineData: { mimeType: 'image/png', data: refData } },
-    "User's Drawing:",
-    { inlineData: { mimeType: 'image/png', data: userData } },
-    prompt
-  ];
-
-  const systemInstruction = "You are a friendly Art Tutor. Your job is to extract the key structural lines from a user's drawing of a cube and grade them based on visual flow and direction. Avoid mathematical jargon like 'orthogonal', 'vector', or 'cartesian'. Use 'slant', 'angle', and 'direction' instead.";
-
-  // Try primary model, fallback on rate limit
-  const modelsToTry = [MODEL_NAME, FALLBACK_MODEL_NAME];
-
-  for (const modelName of modelsToTry) {
     try {
-      console.log(`Trying model: ${modelName}`);
-      const model = genAI.getGenerativeModel({
-        model: modelName,
-        generationConfig: { responseMimeType: "application/json" },
-        systemInstruction
-      });
-
-      // Use streaming if callback provided
-      if (onStream) {
-        const result = await model.generateContentStream(contentPayload);
-        let fullText = '';
-
-        for await (const chunk of result.stream) {
-          const chunkText = chunk.text();
-          fullText += chunkText;
-          onStream(fullText);
-        }
-
-        try {
-          const data = JSON.parse(fullText);
-          if (!data.grade) data.grade = 'C';
-          console.log(`Success with model: ${modelName}`);
-          return data;
-        } catch (e) {
-          console.error("Failed to parse JSON:", fullText);
-          // Return empty structure on failure
-          return { grade: 'F', feedback: fullText, leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] };
-        }
-      } else {
-        // Non-streaming fallback
-        const result = await model.generateContent(contentPayload);
-        const response = await result.response;
-        const text = response.text();
-
-        try {
-          const data = JSON.parse(text);
-          if (!data.grade) data.grade = 'C';
-          console.log(`Success with model: ${modelName}`);
-          return data;
-        } catch (e) {
-          console.error("Failed to parse JSON:", text);
-          return { grade: 'F', feedback: text, leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] };
-        }
-      }
-    } catch (error) {
-      console.warn(`Model ${modelName} failed:`, error);
-      if (isRateLimitError(error) && modelName !== FALLBACK_MODEL_NAME) {
-        console.log(`Rate limited on ${modelName}, trying fallback...`);
-        continue; // Try next model
-      }
-      // If not a rate limit error or we're already on fallback, throw
-      if (modelName === FALLBACK_MODEL_NAME) {
-        console.error("Gemini Comparison Error (all models exhausted):", error);
-        return { grade: 'F', feedback: "Failed to compare images. Please try again later.", leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] };
-      }
+      const data = JSON.parse(text);
+      return {
+        grade: data.grade || 'C',
+        feedback: data.feedback || '',
+        referenceEdges: data.referenceEdges || [],
+        userEdges: data.userEdges || []
+      };
+    } catch (e) {
+      console.error("Failed to parse JSON:", text);
+      return { grade: 'C', feedback: text, referenceEdges: [], userEdges: [] };
     }
+  } catch (error) {
+    console.error("Gemini Comparison Error:", error);
+    return { grade: 'F', feedback: "Failed to compare images. Please try again.", referenceEdges: [], userEdges: [] };
   }
-
-  return { grade: 'F', feedback: "Failed to compare images. Please try again.", leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] };
 }
+
+// Lesson style based on difficulty
+const LESSON_STYLE: Record<Difficulty, { depth: string; exercise: string }> = {
+  beginner: {
+    depth: `Keep explanations simple and visual. Use analogies (e.g., "imagine train tracks meeting at the horizon"). Include "Why this matters" sections. Define all technical terms when first used.`,
+    exercise: `Give a simple, confidence-building exercise. Include step-by-step instructions (1. Draw a horizontal line... 2. Mark a point...). Focus on one concept at a time.`
+  },
+  intermediate: {
+    depth: `Balance theory with practical application. Reference underlying geometry briefly. Include tips for common pitfalls.`,
+    exercise: `Give a moderately challenging exercise that combines 2-3 concepts. Provide guidelines but let them problem-solve some details.`
+  },
+  advanced: {
+    depth: `Focus on theory, edge cases, and professional techniques. Discuss why certain rules exist geometrically. Include advanced considerations like station point distance and cone of vision.`,
+    exercise: `Give a challenging exercise that tests mastery. Minimal hand-holding - describe the goal and let them figure out the approach. Include a "push yourself" variation.`
+  }
+};
 
 /**
  * Generates a lesson content based on a topic.
  */
 export const generateLesson = async (topic: string): Promise<string> => {
   try {
+    const difficulty = getDifficulty();
+    const lessonStyle = LESSON_STYLE[difficulty];
+
     const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
     const prompt = `Create a short, interactive art lesson about: "${topic}" specifically in the context of drawing CUBES in perspective.
-    Include:
-    1. Definition.
-    2. Key Rules(e.g., relationship to the Horizon Line).
-    3. Common Mistakes(e.g., expanding rear planes).
-    4. A Short "Cube Sketch" Exercise(e.g., Draw a cube floating above the horizon).
-    Use Markdown formatting with bold headers and bullet points.`;
+
+## Lesson Structure (use Markdown formatting):
+
+### 1. Definition
+What is ${topic}? ${difficulty === 'beginner' ? 'Explain like teaching a curious beginner.' : difficulty === 'advanced' ? 'Be concise - they know the basics.' : 'Clear and practical.'}
+
+### 2. Key Rules
+${difficulty === 'beginner' ? '3-4 simple rules with visual descriptions' : difficulty === 'advanced' ? '2-3 precise technical rules' : '3 practical rules'}
+
+### 3. Common Mistakes
+${difficulty === 'beginner' ? '2 common beginner mistakes with friendly explanations of why they happen' : difficulty === 'advanced' ? '2 subtle errors that even experienced artists make' : '2-3 typical mistakes to avoid'}
+
+### 4. Practice Exercise
+${lessonStyle.exercise}
+
+---
+Style guidance: ${lessonStyle.depth}
+
+Use **bold headers**, bullet points, and keep it scannable. Total length: ${difficulty === 'beginner' ? '400-500 words' : difficulty === 'advanced' ? '250-350 words' : '300-400 words'}.`;
 
     const result = await model.generateContent(prompt);
     const response = await result.response;

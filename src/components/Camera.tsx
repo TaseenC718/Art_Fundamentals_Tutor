@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera as CameraIcon, RotateCcw, Check, Trash2, X } from 'lucide-react';
+import { Camera as CameraIcon, RotateCcw, Check, Trash2, X, MessageSquare } from 'lucide-react';
 import { savePhoto, getPhotosByDate, deletePhoto, PhotosByDate, StoredPhoto } from '../services/photoStorage';
+import MarkdownRenderer from './MarkdownRenderer';
 
 interface CameraProps {
   onSelectPhoto?: (imageData: string) => void;
@@ -18,6 +19,9 @@ const Camera: React.FC<CameraProps> = ({ onSelectPhoto, selectMode = false }) =>
   const [selectedPhoto, setSelectedPhoto] = useState<StoredPhoto | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [facingMode, setFacingMode] = useState<'user' | 'environment'>('environment');
+
+  // -- NEW: State for toggling feedback view in modal --
+  const [showFeedback, setShowFeedback] = useState(false);
 
   const loadArchive = useCallback(async () => {
     try {
@@ -114,6 +118,7 @@ const Camera: React.FC<CameraProps> = ({ onSelectPhoto, selectMode = false }) =>
       onSelectPhoto(photo.imageData);
     } else {
       setSelectedPhoto(photo);
+      setShowFeedback(false); // Reset to image view by default
     }
   };
 
@@ -121,7 +126,7 @@ const Camera: React.FC<CameraProps> = ({ onSelectPhoto, selectMode = false }) =>
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
-  // Photo preview modal
+  // Photo preview modal (Updated)
   if (selectedPhoto) {
     return (
       <div className="h-full flex flex-col bg-paper">
@@ -133,9 +138,26 @@ const Camera: React.FC<CameraProps> = ({ onSelectPhoto, selectMode = false }) =>
             <X size={20} />
             Back
           </button>
-          <span className="text-xs text-pencil/60 font-hand">
-            {new Date(selectedPhoto.timestamp).toLocaleString()}
-          </span>
+          
+          {/* Toggle between Image and Feedback if feedback exists */}
+          {selectedPhoto.feedback && (
+             <div className="flex bg-pencil/10 rounded-md p-1 gap-1">
+               <button 
+                 onClick={() => setShowFeedback(false)}
+                 className={`px-3 py-1 rounded text-sm font-bold font-hand transition-all ${!showFeedback ? 'bg-white shadow-sm text-pencil' : 'text-pencil/50 hover:text-pencil'}`}
+               >
+                 Photo
+               </button>
+               <button 
+                 onClick={() => setShowFeedback(true)}
+                 className={`px-3 py-1 rounded text-sm font-bold font-hand transition-all flex items-center gap-1 ${showFeedback ? 'bg-white shadow-sm text-sketch-orange' : 'text-pencil/50 hover:text-pencil'}`}
+               >
+                 <MessageSquare size={14} />
+                 Feedback
+               </button>
+             </div>
+          )}
+
           <button
             onClick={() => handleDeletePhoto(selectedPhoto)}
             className="flex items-center gap-2 text-sketch-red font-bold font-hand hover:underline"
@@ -144,14 +166,28 @@ const Camera: React.FC<CameraProps> = ({ onSelectPhoto, selectMode = false }) =>
             Delete
           </button>
         </div>
-        <div className="flex-1 p-4 flex items-center justify-center">
-          <img
-            src={selectedPhoto.imageData}
-            alt="Selected photo"
-            className="max-w-full max-h-full object-contain rounded-lg border-2 border-pencil shadow-sketch"
-          />
+
+        <div className="flex-1 p-4 flex flex-col items-center overflow-hidden">
+          {showFeedback && selectedPhoto.feedback ? (
+            <div className="w-full h-full max-w-2xl bg-white rounded-sm shadow-sketch border-2 border-pencil p-6 overflow-y-auto">
+              <h3 className="font-heading text-xl text-pencil mb-4 border-b-2 border-pencil/20 pb-2">Critique Results</h3>
+              <MarkdownRenderer content={selectedPhoto.feedback || ''} className="font-hand" />
+            </div>
+          ) : (
+            <>
+               <img
+                src={selectedPhoto.imageData}
+                alt="Selected photo"
+                className="max-w-full max-h-full object-contain rounded-lg border-2 border-pencil shadow-sketch bg-white"
+              />
+              <p className="mt-4 text-xs text-pencil/60 font-hand">
+                Captured on {new Date(selectedPhoto.timestamp).toLocaleString()}
+              </p>
+            </>
+          )}
         </div>
-        {selectMode && onSelectPhoto && (
+
+        {selectMode && onSelectPhoto && !showFeedback && (
           <div className="p-4 border-t-2 border-pencil border-dashed">
             <button
               onClick={() => onSelectPhoto(selectedPhoto.imageData)}
@@ -262,13 +298,19 @@ const Camera: React.FC<CameraProps> = ({ onSelectPhoto, selectMode = false }) =>
                     <button
                       key={photo.id}
                       onClick={() => handleSelectFromArchive(photo)}
-                      className="aspect-square rounded-lg overflow-hidden border-2 border-pencil shadow-sketch hover:shadow-sketch-hover hover:-translate-y-0.5 transition-all bg-white"
+                      className="relative aspect-square rounded-lg overflow-hidden border-2 border-pencil shadow-sketch hover:shadow-sketch-hover hover:-translate-y-0.5 transition-all bg-white group"
                     >
                       <img
                         src={photo.imageData}
                         alt="Archived drawing"
                         className="w-full h-full object-cover"
                       />
+                      {/* Show small feedback icon overlay if feedback exists */}
+                      {photo.feedback && (
+                        <div className="absolute bottom-1 right-1 w-5 h-5 bg-sketch-orange border border-pencil rounded-full flex items-center justify-center shadow-sm">
+                          <MessageSquare size={10} className="text-pencil" />
+                        </div>
+                      )}
                     </button>
                   ))}
                 </div>

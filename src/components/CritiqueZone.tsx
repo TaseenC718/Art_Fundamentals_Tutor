@@ -1,39 +1,27 @@
 import React, { useState, useRef, Suspense, useEffect, useMemo } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, Environment, useHelper } from '@react-three/drei';
+import { OrbitControls, Environment } from '@react-three/drei';
 import * as THREE from 'three';
 import * as Icons from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
 import { compareDrawings } from '../services/geminiService';
 import { recordCritique, getDifficulty, DIFFICULTY_CONFIG } from '../services/storageService';
+import { savePhoto } from '../services/photoStorage';
 import Camera from './Camera';
 
 // --- Helper Functions for VP Calculation ---
-const HORIZON_Z = -100; // Far distance for horizon line
+const HORIZON_Z = -100;
 
-// Calculate VP position on the horizon plane (Z = -100)
-// This finds the world-space coordinate where a parallel line extending from the camera intersects the horizon plane.
 const getVanishingPoint = (camera: THREE.Camera, rotation: number, axis: 'x' | 'z'): THREE.Vector3 | null => {
   const dir = new THREE.Vector3(axis === 'x' ? 1 : 0, 0, axis === 'z' ? 1 : 0);
   dir.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation);
-
-  // We want the direction that points 'into' the screen (away from camera Z)
-  // Camera is at +Z, looking towards -Z.
-  // So we want the component with negative Z.
   if (dir.z > 0) dir.negate();
-
-  // If parallel to horizon plane (horizontal), VP is at infinity (no intersection)
   if (Math.abs(dir.z) < 0.001) return null;
-
   const t = (HORIZON_Z - camera.position.z) / dir.z;
-
-  // Intersection point
   const x = camera.position.x + dir.x * t;
   const y = camera.position.y + dir.y * t;
-
   return new THREE.Vector3(x, y, HORIZON_Z);
 };
-
 
 interface CameraControllerProps {
   fov: number;
@@ -50,7 +38,7 @@ const CameraController = ({ fov, preset, distance, height }: CameraControllerPro
   useEffect(() => {
     if (camera instanceof THREE.PerspectiveCamera) {
       camera.fov = fov;
-      camera.far = 10000; // Extend far plane to see the horizon
+      camera.far = 10000;
       camera.updateProjectionMatrix();
     }
   }, [fov, camera]);
@@ -58,19 +46,13 @@ const CameraController = ({ fov, preset, distance, height }: CameraControllerPro
   useEffect(() => {
     if (preset === 'free') {
       setIsLocked(false);
-      // Reset to a reasonable free-look angle
       camera.position.set(10, 10, 10);
       camera.lookAt(0, 0, 0);
     } else {
       setIsLocked(true);
-      // Fixed frontal view for 1pt/2pt (simulating "looking straight at horizon")
-      // We raise slightly (y=2) to see the top face
       camera.position.set(0, height, distance);
       camera.lookAt(0, 0, 0);
-      camera.rotation.set(0, 0, 0); // Force strictly forward-facing for 1pt/2pt alignment
-
-      // Manual lookAt adjustment if needed, but atomic set is safer
-      // Re-orient to ensure horizon is flat
+      camera.rotation.set(0, 0, 0);
       camera.lookAt(0, 0, 0);
     }
   }, [preset, distance, camera, height]);
@@ -87,23 +69,16 @@ const CameraController = ({ fov, preset, distance, height }: CameraControllerPro
   );
 };
 
-// --- Horizon Helper Component ---
 const HorizonHelper = ({ camera }: { camera: THREE.Camera }) => {
   const lineRef = useRef<THREE.Line>(null);
-
-  // Use a very wide line to simulate infinite horizon
   const points = useMemo(() => [
     new THREE.Vector3(-10000, 0, 0),
     new THREE.Vector3(10000, 0, 0)
   ], []);
-
   const geometry = useMemo(() => new THREE.BufferGeometry().setFromPoints(points), [points]);
 
   useFrame(() => {
     if (lineRef.current) {
-      // The horizon line is always at the specific distance (HORIZON_Z)
-      // and at the height of the camera (Eye Level).
-      // We also center it on the camera's X so it spans the view.
       lineRef.current.position.set(camera.position.x, camera.position.y, HORIZON_Z);
     }
   });
@@ -123,8 +98,6 @@ interface VPHelpersProps {
   preset: string;
 }
 
-
-
 const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
   const meshRef1 = useRef<THREE.Mesh>(null);
   const meshRef2 = useRef<THREE.Mesh>(null);
@@ -134,92 +107,29 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
   useFrame(() => {
     const vpX = getVanishingPoint(camera, rotation, 'x');
     const vpZ = getVanishingPoint(camera, rotation, 'z');
-
-    // Calculate world corners
     const halfSize = 1.25;
-    const corners = [];
-    for (let x of [-1, 1]) {
-      for (let y of [-1, 1]) {
-        for (let z of [-1, 1]) {
-          const v = new THREE.Vector3(x * halfSize, y * halfSize, z * halfSize);
-          v.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation);
-          v.add(new THREE.Vector3(...cubePos));
-          corners.push(v);
-        }
-      }
-    }
-    // Logic: In 1pt, we see the front face (4 corners). We want lines from these 4 corners to VP.
-    // That makes 4 lines.
 
     const updateLines = (vp: THREE.Vector3, lineRef: React.RefObject<THREE.LineSegments>, color: string) => {
       if (!lineRef.current) return;
-
       lineRef.current.visible = true;
       const positions = lineRef.current.geometry.attributes.position;
-
-      // We want 4 lines. 
-      // Which 4 corners? 
-      // Let's picking the 4 "top/bottom left/right" relative to the view is hard.
-      // Let's just draw from 4 specific corners. 
-      // For VP-Z (Depth), we want lines extending from the front face (min-Z?)
-      // But rotation makes "front" relative.
-      // 
-      // Improved visual: Draw from ALL 8 corners? User might find 8 lines cluttered.
-      // But user specifically said "four vanishing point lines".
-      // This likely refers to the 4 edges converging.
-      // Let's try drawing all 8 for a moment, or better, calculate the 4 'outer' ones? Hard.
-      // 
-      // Let's try drawing from the 4 corners that are 'furthest' from VP? Or closest?
-      // Let's just draw from the 4 corners of the +/- X/Y face.
-      // 
-      // Actually, for Z-VP, the 4 edges are formed by:
-      // (-1,-1,z), (1,-1,z), (-1,1,z), (1,1,z)
-      // We can just pick one end of each edge? 
-      // Let's pick the end 'closest' to the camera?
-      // Or just draw from both? No 8 lines.
-      // 
-      // Let's draw from the point `p` such that the vector `p -> VP` doesn't pass through the other point?
-      // i.e. The point further from VP?
-      // Actually, if we draw from the point FURTHEST from VP, the line goes through the cube (along the edge) to the VP.
-      // This effectively highlights the edge AND the extension. This is usually desired.
-
       let idx = 0;
-
-      // For Z-VP: Iterate the 4 X/Y combinations
-      // (-hs, -hs), (hs, -hs), (-hs, hs), (hs, hs)
-
       const sets = [
-        [-halfSize, -halfSize],
-        [halfSize, -halfSize],
-        [-halfSize, halfSize],
-        [halfSize, halfSize]
+        [-halfSize, -halfSize], [halfSize, -halfSize],
+        [-halfSize, halfSize], [halfSize, halfSize]
       ];
 
       sets.forEach(([c1, c2]) => {
-        // For Z-VP: c1=x, c2=y. Z varies.
-        // We have two endpoints for this edge: at local Z = -hs and Z = hs.
-        // We want to draw from *one* of them to the VP.
-        // Actually, drawing from the one visually 'closest' to avoiding passing through the cube?
-        // Or just draw from both? No 8 lines.
-        // 
-        // Let's draw from the point `p` such that the vector `p -> VP` doesn't pass through the other point?
-        // i.e. The point further from VP?
-        // Actually, if we draw from the point FURTHEST from VP, the line goes through the cube (along the edge) to the VP.
-        // This effectively highlights the edge AND the extension. This is usually desired.
-
         let pFar = new THREE.Vector3(0, 0, 0);
-        let pNear = new THREE.Vector3(0, 0, 0);
         let maxDist = -1;
 
-        // Check both ends of the edge
         [-halfSize, halfSize].forEach(v3 => {
           let localPos = new THREE.Vector3(0, 0, 0);
-          if (color === 'orange') { // Z-VP
+          if (color === 'orange') { 
             localPos.set(c1, c2, v3);
-          } else { // X-VP (Cyan) -> c1=z, c2=y. X varies.
+          } else { 
             localPos.set(v3, c2, c1);
           }
-
           localPos.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotation);
           localPos.add(new THREE.Vector3(...cubePos));
 
@@ -233,13 +143,9 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
         positions.setXYZ(idx++, pFar.x, pFar.y, pFar.z);
         positions.setXYZ(idx++, vp.x, vp.y, vp.z);
       });
-
       positions.needsUpdate = true;
     };
 
-
-    // --- Update VP 1 (Cyan / X-axis) ---
-    // Only visible in 2pt
     if (meshRef1.current && lineRef1.current) {
       if (preset === '2pt' && vpX) {
         meshRef1.current.visible = true;
@@ -251,8 +157,6 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
       }
     }
 
-    // --- Update VP 2 (Orange / Z-axis) ---
-    // Visible in 1pt (Center) and 2pt (Right side usually)
     if (meshRef2.current && lineRef2.current) {
       if (vpZ) {
         meshRef2.current.visible = true;
@@ -267,35 +171,15 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
 
   return (
     <>
-      <mesh ref={meshRef1}>
-        <sphereGeometry args={[1]} />
-        <meshBasicMaterial color="cyan" />
-      </mesh>
+      <mesh ref={meshRef1}><sphereGeometry args={[1]} /><meshBasicMaterial color="cyan" /></mesh>
       <lineSegments ref={lineRef1 as any}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            count={8}
-            array={new Float32Array(24)}
-            itemSize={3}
-          />
-        </bufferGeometry>
+        <bufferGeometry><bufferAttribute attach="attributes-position" count={8} array={new Float32Array(24)} itemSize={3} /></bufferGeometry>
         <lineBasicMaterial color="cyan" opacity={0.5} transparent />
       </lineSegments>
 
-      <mesh ref={meshRef2}>
-        <sphereGeometry args={[1]} />
-        <meshBasicMaterial color="orange" />
-      </mesh>
+      <mesh ref={meshRef2}><sphereGeometry args={[1]} /><meshBasicMaterial color="orange" /></mesh>
       <lineSegments ref={lineRef2 as any}>
-        <bufferGeometry>
-          <bufferAttribute
-            attach="attributes-position"
-            count={8}
-            array={new Float32Array(24)}
-            itemSize={3}
-          />
-        </bufferGeometry>
+        <bufferGeometry><bufferAttribute attach="attributes-position" count={8} array={new Float32Array(24)} itemSize={3} /></bufferGeometry>
         <lineBasicMaterial color="orange" opacity={0.5} transparent />
       </lineSegments>
     </>
@@ -325,22 +209,14 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
   const edgeGeometry = useMemo(() => new THREE.BoxGeometry(2.5, 2.5, 2.5), []);
   const cubeMaterial = useRef<THREE.MeshStandardMaterial>(null);
   const cubeMesh = useRef<THREE.Mesh>(null);
-
-  // When capturing, we want a clean shot of the cube without guides
   const areHelpersVisible = !triggerCapture;
 
   useEffect(() => {
     if (triggerCapture) {
-      const originalInfo = {
-        background: scene.background
-      };
-
-      // --- 1. Solid Render (Reference) ---
-      // Force white background for "paper" look
+      const originalInfo = { background: scene.background };
       scene.background = new THREE.Color('#ffffff');
       gl.render(scene, camera);
 
-      // Helper for cropping
       const getCroppedImage = (minX: number, minY: number, width: number, height: number) => {
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = width;
@@ -351,16 +227,11 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         return tempCanvas.toDataURL('image/png');
       };
 
-      // Calculate Cube Bounding Box in Screen Space
       const width = gl.domElement.width;
       const height = gl.domElement.height;
-      const halfSize = 1.25; // Half of cube size (2.5)
+      const halfSize = 1.25;
 
-      let minX = width;
-      let maxX = 0;
-      let minY = height;
-      let maxY = 0;
-
+      let minX = width, maxX = 0, minY = height, maxY = 0;
       const edgesX: [number, number, number, number][] = [];
       const edgesZ: [number, number, number, number][] = [];
 
@@ -372,19 +243,13 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         return [px, py];
       };
 
-      // Define edges (start corner -> end corner)
-      // Cube is +/- halfSize
       const hs = halfSize;
-
-      // X-Edges (Parallel to X axis)
       const xSegments = [
         [new THREE.Vector3(-hs, -hs, -hs), new THREE.Vector3(hs, -hs, -hs)],
         [new THREE.Vector3(-hs, hs, -hs), new THREE.Vector3(hs, hs, -hs)],
         [new THREE.Vector3(-hs, -hs, hs), new THREE.Vector3(hs, -hs, hs)],
         [new THREE.Vector3(-hs, hs, hs), new THREE.Vector3(hs, hs, hs)],
       ];
-
-      // Z-Edges (Parallel to Z axis)
       const zSegments = [
         [new THREE.Vector3(-hs, -hs, -hs), new THREE.Vector3(-hs, -hs, hs)],
         [new THREE.Vector3(hs, -hs, -hs), new THREE.Vector3(hs, -hs, hs)],
@@ -396,12 +261,9 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         segments.forEach(seg => {
           const start = seg[0].clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cubeRotation).add(new THREE.Vector3(...cubePos));
           const end = seg[1].clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), cubeRotation).add(new THREE.Vector3(...cubePos));
-
           const [x1, y1] = projectVec(start);
           const [x2, y2] = projectVec(end);
           output.push([x1, y1, x2, y2]);
-
-          // Update Bounds
           minX = Math.min(minX, x1, x2);
           maxX = Math.max(maxX, x1, x2);
           minY = Math.min(minY, y1, y2);
@@ -412,8 +274,7 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
       processEdges(xSegments, edgesX);
       processEdges(zSegments, edgesZ);
 
-      // Also process vertical edges just for bounding box
-      const ySegments = [
+       const ySegments = [
         [new THREE.Vector3(-hs, -hs, -hs), new THREE.Vector3(-hs, hs, -hs)],
         [new THREE.Vector3(hs, -hs, -hs), new THREE.Vector3(hs, hs, -hs)],
         [new THREE.Vector3(-hs, -hs, hs), new THREE.Vector3(-hs, hs, hs)],
@@ -430,68 +291,50 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         maxY = Math.max(maxY, y1, y2);
       });
 
-      // Add Padding
       const contentWidth = maxX - minX;
       const contentHeight = maxY - minY;
-      const padding = Math.max(contentWidth, contentHeight) * 0.1; // 10% of object size
+      const padding = Math.max(contentWidth, contentHeight) * 0.1;
 
       minX = Math.max(0, Math.floor(minX - padding));
       minY = Math.max(0, Math.floor(minY - padding));
       maxX = Math.min(width, Math.ceil(maxX + padding));
       maxY = Math.min(height, Math.ceil(maxY + padding));
-
       const cropWidth = maxX - minX;
       const cropHeight = maxY - minY;
 
       const solidData = getCroppedImage(minX, minY, cropWidth, cropHeight);
 
-      // --- 2. Wireframe Render (Lines) ---
-      // Transparent BG
       scene.background = null;
-      // Hide solid faces
       if (cubeMaterial.current) cubeMaterial.current.visible = false;
-
       gl.clear();
       gl.render(scene, camera);
-
       const wireframeData = getCroppedImage(minX, minY, cropWidth, cropHeight);
-
-      // Restore
       if (cubeMaterial.current) cubeMaterial.current.visible = true;
       scene.background = originalInfo.background;
 
-      // --- Calculate VP Positions (Screen Space) ---
-      const camZ = camera.position.z;
-
-      // Helper function to project a point
       const projectPoint = (x: number, y: number, z: number) => {
         const vec = new THREE.Vector3(x, y, z);
         vec.project(camera);
         const px = (vec.x + 1) / 2 * width;
         const py = -(vec.y - 1) / 2 * height;
-        // Adjust for crop
         return [px - minX, py - minY] as [number, number];
       };
 
       let vpLeftCoords: [number, number] | null = null;
       let vpRightCoords: [number, number] | null = null;
-      // Horizon Y in screen space (project center of horizon)
       const horizonCenter = projectPoint(0, 0, HORIZON_Z);
       const horizonY = horizonCenter[1];
 
       if (preset === '1pt') {
-        // 1pt: Center VP corresponds to Z axis
         const vp = getVanishingPoint(camera, cubeRotation, 'z');
         if (vp) vpLeftCoords = projectPoint(vp.x, vp.y, vp.z);
       } else if (preset === '2pt') {
         const vp1 = getVanishingPoint(camera, cubeRotation, 'x');
         const vp2 = getVanishingPoint(camera, cubeRotation, 'z');
-
         if (vp1) {
           const coords = projectPoint(vp1.x, vp1.y, vp1.z);
-          // Assign to Left/Right based on screen X
           if (!vpLeftCoords || coords[0] < vpLeftCoords[0]) {
-            vpRightCoords = vpLeftCoords; // Push existing to right if new is more left? Simplified below
+            vpRightCoords = vpLeftCoords;
             vpLeftCoords = coords;
           } else {
             vpRightCoords = coords;
@@ -526,19 +369,14 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
     }
   }, [triggerCapture, gl, scene, camera, onCapture, cubePos, cubeRotation, preset]);
 
-  // Handle Dragging
   const handlePointerDown = (e: ThreeEvent<PointerEvent>) => {
     if (preset !== '1pt' && preset !== '2pt') return;
     e.stopPropagation();
     isDragging.current = true;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-
-    // Calculate offset from current cube pos to intersection point on plane
-    // Intersect plane z=0
     const pointOnPlane = new THREE.Vector3();
     e.ray.intersectPlane(dragPlane, pointOnPlane);
     dragOffset.current.copy(new THREE.Vector3(...cubePos)).sub(pointOnPlane);
-
     if (interactionMode === 'rotate') {
       startX.current = e.clientX;
       startRotation.current = cubeRotation;
@@ -554,9 +392,7 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
   const handlePointerMove = (e: ThreeEvent<PointerEvent>) => {
     if ((preset !== '1pt' && preset !== '2pt') || !isDragging.current) return;
     e.stopPropagation();
-
     if (interactionMode === 'move') {
-      // Project ray to plane at z=0 using mathematical plane, not object surface
       const pointOnPlane = new THREE.Vector3();
       e.ray.intersectPlane(dragPlane, pointOnPlane);
       if (pointOnPlane) {
@@ -570,68 +406,25 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
     }
   };
 
-  const totalRotation = cubeRotation;
-
   return (
     <>
       <ambientLight intensity={0.8} />
       <directionalLight position={[5, 10, 5]} intensity={1.2} />
-
-      <gridHelper
-        args={[10000, 200, 0xdddddd, 0xeeeeee]}
-        position={[0, -1.25, 0]}
-        visible={areHelpersVisible && showGuides}
-      />
-
-      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && (
-        // Horizon Line
-        <HorizonHelper camera={camera} />
-      )}
-
-      {/* Vanishing Point Metrics (Debug/Visual) */}
-      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && (
-        <VPHelpers camera={camera} rotation={cubeRotation} cubePos={cubePos} preset={preset} />
-      )}
-
-      <mesh
-        ref={cubeMesh}
-        position={preset === 'free' ? [0, 0, 0] : cubePos}
-        rotation={[0, totalRotation, 0]}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-      >
+      <gridHelper args={[10000, 200, 0xdddddd, 0xeeeeee]} position={[0, -1.25, 0]} visible={areHelpersVisible && showGuides} />
+      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && <HorizonHelper camera={camera} />}
+      {(preset === '1pt' || preset === '2pt') && areHelpersVisible && showGuides && <VPHelpers camera={camera} rotation={cubeRotation} cubePos={cubePos} preset={preset} />}
+      <mesh ref={cubeMesh} position={preset === 'free' ? [0, 0, 0] : cubePos} rotation={[0, cubeRotation, 0]} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
         <boxGeometry args={[2.5, 2.5, 2.5]} />
-        {triggerCapture ? (
-          <meshBasicMaterial ref={cubeMaterial as any} color="#ffffff" />
-        ) : (
-          <meshStandardMaterial ref={cubeMaterial as any} color="#ffffff" roughness={0.9} metalness={0.1} />
-        )}
-        <lineSegments>
-          <edgesGeometry args={[edgeGeometry]} />
-          <lineBasicMaterial color="#2D2D2D" linewidth={2} />
-        </lineSegments>
+        {triggerCapture ? <meshBasicMaterial ref={cubeMaterial as any} color="#ffffff" /> : <meshStandardMaterial ref={cubeMaterial as any} color="#ffffff" roughness={0.9} metalness={0.1} />}
+        <lineSegments><edgesGeometry args={[edgeGeometry]} /><lineBasicMaterial color="#2D2D2D" linewidth={2} /></lineSegments>
       </mesh>
-
-      <mesh
-        visible={false}
-        position={[0, 0, 0]}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-      >
-        <planeGeometry args={[100, 100]} />
-        <meshBasicMaterial />
-      </mesh>
-
+      <mesh visible={false} position={[0, 0, 0]} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}><planeGeometry args={[100, 100]} /><meshBasicMaterial /></mesh>
       <Environment preset="city" />
     </>
   );
 };
 
 type Step = 'pose' | 'draw' | 'result';
-
-// Step indicator component
 const STEP_CONFIG = [
   { key: 'pose', label: 'Set up your reference', icon: Icons.Box },
   { key: 'draw', label: 'Upload your drawing', icon: Icons.Upload },
@@ -644,39 +437,20 @@ interface StepIndicatorProps {
 
 const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep }) => {
   const currentIndex = STEP_CONFIG.findIndex(s => s.key === currentStep);
-
   return (
     <div className="flex items-center justify-center gap-1 md:gap-2 py-3 px-2 bg-paper border-b-2 border-pencil border-dashed">
       {STEP_CONFIG.map((stepInfo, index) => {
-        const Icon = stepInfo.icon;
         const isActive = index === currentIndex;
         const isCompleted = index < currentIndex;
-
         return (
           <React.Fragment key={stepInfo.key}>
-            <div className={`flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 rounded-lg transition-all ${
-              isActive
-                ? 'bg-sketch-orange border-2 border-pencil shadow-sm transform -rotate-1'
-                : isCompleted
-                  ? 'bg-sketch-blue/30 border-2 border-pencil/30'
-                  : 'bg-paper border-2 border-pencil/20'
-            }`}>
-              <div className={`flex items-center justify-center w-6 h-6 rounded-full text-sm font-bold ${
-                isActive ? 'bg-pencil text-paper' : isCompleted ? 'bg-sketch-blue text-pencil' : 'bg-pencil/20 text-pencil/50'
-              }`}>
+            <div className={`flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 rounded-lg transition-all ${isActive ? 'bg-sketch-orange border-2 border-pencil shadow-sm transform -rotate-1' : isCompleted ? 'bg-sketch-blue/30 border-2 border-pencil/30' : 'bg-paper border-2 border-pencil/20'}`}>
+              <div className={`flex items-center justify-center w-6 h-6 rounded-full text-sm font-bold ${isActive ? 'bg-pencil text-paper' : isCompleted ? 'bg-sketch-blue text-pencil' : 'bg-pencil/20 text-pencil/50'}`}>
                 {isCompleted ? <Icons.Check size={14} /> : index + 1}
               </div>
-              <span className={`hidden md:block text-sm font-hand ${
-                isActive ? 'text-pencil font-bold' : isCompleted ? 'text-pencil/70' : 'text-pencil/40'
-              }`}>
-                {stepInfo.label}
-              </span>
+              <span className={`hidden md:block text-sm font-hand ${isActive ? 'text-pencil font-bold' : isCompleted ? 'text-pencil/70' : 'text-pencil/40'}`}>{stepInfo.label}</span>
             </div>
-            {index < STEP_CONFIG.length - 1 && (
-              <div className={`w-4 md:w-8 h-0.5 ${
-                index < currentIndex ? 'bg-sketch-blue' : 'bg-pencil/20'
-              }`} />
-            )}
+            {index < STEP_CONFIG.length - 1 && <div className={`w-4 md:w-8 h-0.5 ${index < currentIndex ? 'bg-sketch-blue' : 'bg-pencil/20'}`} />}
           </React.Fragment>
         );
       })}
@@ -712,7 +486,6 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   }>({ vpLeft: null, vpRight: null, horizonY: null });
 
   const [overlayOpacity, setOverlayOpacity] = useState(0.5);
-
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [loadingPhase, setLoadingPhase] = useState(0);
   const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
@@ -720,32 +493,27 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   const [analysisError, setAnalysisError] = useState<{ type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string } | null>(null);
   const [showPerspectiveLines, setShowPerspectiveLines] = useState(true);
 
+  // -- NEW STATE for Saving --
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasSaved, setHasSaved] = useState(false);
+
   const [fov, setFov] = useState(55);
   const [cameraDistance, setCameraDistance] = useState(15);
   const [cameraHeight, setCameraHeight] = useState(0);
-
   const [preset, setPreset] = useState('1pt');
   const [showGuides, setShowGuides] = useState(() => {
     const difficulty = getDifficulty();
     return DIFFICULTY_CONFIG[difficulty].showGuides;
   });
 
-  // Update showGuides when difficulty changes
   useEffect(() => {
     if (difficultyProp) {
       setShowGuides(DIFFICULTY_CONFIG[difficultyProp].showGuides);
     }
   }, [difficultyProp]);
 
-  // Loading phase messages
-  const LOADING_PHASES = [
-    "Analyzing your lines...",
-    "Checking convergence points...",
-    "Comparing with reference...",
-    "Generating feedback..."
-  ];
+  const LOADING_PHASES = ["Analyzing your lines...", "Checking convergence points...", "Comparing with reference...", "Generating feedback..."];
 
-  // Cycle through loading phases
   useEffect(() => {
     if (!isAnalyzing) {
       setLoadingPhase(0);
@@ -753,20 +521,14 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
       setElapsedTime(0);
       return;
     }
-
     setLoadingStartTime(Date.now());
     setLoadingPhase(0);
-
     const phaseInterval = setInterval(() => {
       setLoadingPhase(prev => (prev + 1) % LOADING_PHASES.length);
     }, 2500);
-
     const timeInterval = setInterval(() => {
-      if (loadingStartTime) {
-        setElapsedTime(Math.floor((Date.now() - loadingStartTime) / 1000));
-      }
+      if (loadingStartTime) setElapsedTime(Math.floor((Date.now() - loadingStartTime) / 1000));
     }, 1000);
-
     return () => {
       clearInterval(phaseInterval);
       clearInterval(timeInterval);
@@ -776,7 +538,6 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   const [cubePos, setCubePos] = useState<[number, number, number]>([0, 0, 0]);
   const [cubeRotation, setCubeRotation] = useState(0);
   const [interactionMode, setInteractionMode] = useState<'move' | 'rotate'>('move');
-
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showArchiveModal, setShowArchiveModal] = useState(false);
 
@@ -808,36 +569,45 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
     }
   };
 
+  // -- NEW: Save Function --
+  const handleSaveResult = async () => {
+    if (!userDrawing || !analysis || isSaving || hasSaved) return;
+
+    setIsSaving(true);
+    try {
+      // Save the photo along with the analysis text
+      await savePhoto(userDrawing, analysis);
+      setHasSaved(true);
+    } catch (err) {
+      console.error('Failed to save result:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const runComparison = async () => {
     if (!referenceImage || !userDrawing) return;
     setIsAnalyzing(true);
     setAnalysisError(null);
-    // Stay on 'draw' step while analyzing - show inline loading overlay
+    setHasSaved(false); // Reset saved state for new analysis
 
     try {
       const result = await compareDrawings(referenceImage, userDrawing);
-
-      // Check if we got valid feedback
       if (!result.feedback || result.feedback.includes("Failed to compare")) {
         setAnalysisError({ type: 'parse', message: 'Could not parse the AI response. Please try again.' });
         setIsAnalyzing(false);
         return;
       }
-
       setAnalysis(result.feedback);
       setLineSets({
         leftSet: result.leftSet || [],
         rightSet: result.rightSet || [],
         verticalSet: result.verticalSet || []
       });
-      // Record critique completion for progress tracking
       recordCritique();
-      // Only transition to result step on success
       setStep('result');
     } catch (error: any) {
-      // Distinguish error types
       let errorInfo: { type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string };
-
       if (error?.message?.includes('network') || error?.message?.includes('fetch')) {
         errorInfo = { type: 'network', message: 'Network error. Please check your connection and try again.' };
       } else if (error?.message?.includes('timeout') || error?.name === 'AbortError') {
@@ -847,7 +617,6 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
       } else {
         errorInfo = { type: 'unknown', message: 'Something went wrong. Please try again.' };
       }
-
       setAnalysisError(errorInfo);
       setAnalysis(null);
       setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
@@ -867,6 +636,7 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
     setIsAnalyzing(false);
     setAnalysisError(null);
     setShowPerspectiveLines(true);
+    setHasSaved(false);
   };
 
   const handlePresetChange = (newPreset: string) => {
@@ -887,289 +657,115 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   };
 
   if (step === 'pose') {
-    return (
-      <div className="h-full flex flex-col bg-paper relative">
-        <StepIndicator currentStep={step} />
-        <div className="flex-1 w-full relative">
-          <Canvas gl={{ preserveDrawingBuffer: true }}>
-            <Suspense fallback={null}>
-              <CameraController fov={fov} preset={preset} distance={cameraDistance} height={cameraHeight} />
-              <SceneContent
-                onCapture={handleCapture}
-                triggerCapture={triggerCapture}
-                showGuides={showGuides}
-                preset={preset}
-                cubePos={cubePos}
-                cubeRotation={cubeRotation}
-                interactionMode={interactionMode}
-                onCubeMove={setCubePos}
-                onCubeRotate={setCubeRotation}
-              />
-            </Suspense>
-          </Canvas>
-
-          <div className="absolute top-4 left-4 right-4 flex flex-col items-center pointer-events-none gap-4">
-            <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg p-2 flex gap-2 pointer-events-auto border-2 border-pencil">
-              {['1pt', '2pt', 'free'].map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => handlePresetChange(mode)}
-                  className={`px-4 py-1.5 rounded-md text-sm font-bold uppercase tracking-wider transition-all border-2 border-transparent ${preset === mode
-                    ? 'bg-sketch-orange text-pencil border-pencil shadow-sm transform -rotate-1'
-                    : 'text-pencil hover:bg-sketch-yellow hover:border-pencil hover:-rotate-1'
-                    }`}
-                >
-                  {mode === 'free' ? 'Free' : mode.replace('pt', '-Point')}
-                </button>
-              ))}
+      return (
+        <div className="h-full flex flex-col bg-paper relative">
+          <StepIndicator currentStep={step} />
+          <div className="flex-1 w-full relative">
+            <Canvas gl={{ preserveDrawingBuffer: true }}>
+              <Suspense fallback={null}>
+                <CameraController fov={fov} preset={preset} distance={cameraDistance} height={cameraHeight} />
+                <SceneContent onCapture={handleCapture} triggerCapture={triggerCapture} showGuides={showGuides} preset={preset} cubePos={cubePos} cubeRotation={cubeRotation} interactionMode={interactionMode} onCubeMove={setCubePos} onCubeRotate={setCubeRotation} />
+              </Suspense>
+            </Canvas>
+  
+            <div className="absolute top-4 left-4 right-4 flex flex-col items-center pointer-events-none gap-4">
+              <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg p-2 flex gap-2 pointer-events-auto border-2 border-pencil">
+                {['1pt', '2pt', 'free'].map((mode) => (
+                  <button key={mode} onClick={() => handlePresetChange(mode)} className={`px-4 py-1.5 rounded-md text-sm font-bold uppercase tracking-wider transition-all border-2 border-transparent ${preset === mode ? 'bg-sketch-orange text-pencil border-pencil shadow-sm transform -rotate-1' : 'text-pencil hover:bg-sketch-yellow hover:border-pencil hover:-rotate-1'}`}>{mode === 'free' ? 'Free' : mode.replace('pt', '-Point')}</button>
+                ))}
+              </div>
+              <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg px-4 py-2 flex items-center gap-4 pointer-events-auto flex-wrap justify-center border-2 border-pencil mt-2">
+                {(preset === '1pt' || preset === '2pt') && (
+                  <>
+                    <div className="flex items-center gap-1 pr-4 border-r-2 border-pencil">
+                      <button onClick={resetAngle} className="p-1.5 rounded hover:bg-sketch-yellow border-2 border-transparent hover:border-pencil transition-all text-pencil transform active:scale-95" title="Reset View"><Icons.RotateCcw /></button>
+                    </div>
+                    <div className="flex items-center gap-1 pr-4 border-r-2 border-pencil">
+                      <button onClick={() => setInteractionMode('move')} className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'move' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`} title="Move Mode"><Icons.Move /></button>
+                      <button onClick={() => setInteractionMode('rotate')} className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'rotate' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`} title="Rotate Mode"><Icons.RefreshCw /></button>
+                    </div>
+                  </>
+                )}
+                {preset === 'free' && <div className="pr-4 border-r-2 border-pencil"><span className="text-sm font-bold text-pencil font-hand">Orbit Camera</span></div>}
+                <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil"><span className="text-sm font-bold text-pencil font-hand">Dist</span><input type="range" min="5" max="50" value={cameraDistance} onChange={(e) => setCameraDistance(Number(e.target.value))} className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange" /></div>
+                <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil"><span className="text-sm font-bold text-pencil font-hand">Lens</span><input type="range" min="15" max="100" value={fov} onChange={(e) => setFov(Number(e.target.value))} className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange" /></div>
+                <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil"><span className="text-sm font-bold text-pencil font-hand">Height</span><input type="range" min="-5" max="10" step="0.5" value={cameraHeight} onChange={(e) => setCameraHeight(Number(e.target.value))} className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange" /></div>
+                {(preset === '1pt' || preset === '2pt') && <div className="pl-2"><button onClick={() => setShowGuides(!showGuides)} className={`text-sm font-bold font-hand px-3 py-1 rounded-md border-2 transition-all ${showGuides ? 'bg-sketch-red text-pencil border-pencil shadow-sm' : 'bg-paper text-pencil border-dashed border-pencil hover:bg-sketch-yellow'}`}>{showGuides ? 'Hide Guides' : 'Show Guides'}</button></div>}
+              </div>
             </div>
-
-            <div className="bg-paper/90 backdrop-blur shadow-sketch rounded-lg px-4 py-2 flex items-center gap-4 pointer-events-auto flex-wrap justify-center border-2 border-pencil mt-2">
-              {(preset === '1pt' || preset === '2pt') && (
-                <>
-                  <div className="flex items-center gap-1 pr-4 border-r-2 border-pencil">
-                    <button
-                      onClick={resetAngle}
-                      className="p-1.5 rounded hover:bg-sketch-yellow border-2 border-transparent hover:border-pencil transition-all text-pencil transform active:scale-95"
-                      title="Reset View"
-                    >
-                      <Icons.RotateCcw />
-                    </button>
-                  </div>
-
-                  <div className="flex items-center gap-1 pr-4 border-r-2 border-pencil">
-                    <button
-                      onClick={() => setInteractionMode('move')}
-                      className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'move' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`}
-                      title="Move Mode"
-                    >
-                      <Icons.Move />
-                    </button>
-                    <button
-                      onClick={() => setInteractionMode('rotate')}
-                      className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'rotate' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`}
-                      title="Rotate Mode"
-                    >
-                      <Icons.RefreshCw />
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {preset === 'free' && (
-                <div className="pr-4 border-r-2 border-pencil">
-                  <span className="text-sm font-bold text-pencil font-hand">Orbit Camera</span>
-                </div>
-              )}
-
-              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
-                <span className="text-sm font-bold text-pencil font-hand">Dist</span>
-                <input
-                  type="range"
-                  min="5"
-                  max="50"
-                  value={cameraDistance}
-                  onChange={(e) => setCameraDistance(Number(e.target.value))}
-                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
-                <span className="text-sm font-bold text-pencil font-hand">Lens</span>
-                <input
-                  type="range"
-                  min="15"
-                  max="100"
-                  value={fov}
-                  onChange={(e) => setFov(Number(e.target.value))}
-                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
-                <span className="text-sm font-bold text-pencil font-hand">Height</span>
-                <input
-                  type="range"
-                  min="-5"
-                  max="10"
-                  step="0.5"
-                  value={cameraHeight}
-                  onChange={(e) => setCameraHeight(Number(e.target.value))}
-                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
-                />
-              </div>
-
-              {(preset === '1pt' || preset === '2pt') && (
-                <div className="pl-2">
-                  <button
-                    onClick={() => setShowGuides(!showGuides)}
-                    className={`text-sm font-bold font-hand px-3 py-1 rounded-md border-2 transition-all ${showGuides
-                      ? 'bg-sketch-red text-pencil border-pencil shadow-sm'
-                      : 'bg-paper text-pencil border-dashed border-pencil hover:bg-sketch-yellow'
-                      }`}
-                  >
-                    {showGuides ? 'Hide Guides' : 'Show Guides'}
-                  </button>
-                </div>
-              )}
+            <div className="absolute bottom-24 w-full text-center pointer-events-none">
+              <span className="bg-pencil text-paper px-4 py-2 transform -rotate-2 inline-block shadow-sketch rounded-sm text-sm font-hand">
+                {preset === 'free' ? 'Drag to orbit • Pinch to zoom' : interactionMode === 'move' ? 'Drag cube to move' : 'Drag horizontally to rotate cube'}
+              </span>
             </div>
           </div>
-
-          <div className="absolute bottom-24 w-full text-center pointer-events-none">
-            <span className="bg-pencil text-paper px-4 py-2 transform -rotate-2 inline-block shadow-sketch rounded-sm text-sm font-hand">
-              {preset === 'free'
-                ? 'Drag to orbit • Pinch to zoom'
-                : interactionMode === 'move'
-                  ? 'Drag cube to move'
-                  : 'Drag horizontally to rotate cube'
-              }
-            </span>
+          <div className="p-6 bg-paper border-t-2 border-pencil z-10 flex justify-center">
+            <button onClick={triggerSceneCapture} className="w-full max-w-md bg-sketch-blue text-pencil py-4 rounded-xl font-bold text-xl shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 transition-all flex items-center justify-center gap-2 border-2 border-pencil">
+              <Icons.Camera /> Capture & Draw
+            </button>
           </div>
         </div>
-
-        <div className="p-6 bg-paper border-t-2 border-pencil z-10 flex justify-center">
-          <button
-            onClick={triggerSceneCapture}
-            className="w-full max-w-md bg-sketch-blue text-pencil py-4 rounded-xl font-bold text-xl shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 transition-all flex items-center justify-center gap-2 border-2 border-pencil"
-          >
-            <Icons.Camera />
-            Capture & Draw
-          </button>
-        </div>
-      </div>
-    );
+      );
   }
 
   if (step === 'draw') {
     return (
-      <div className="h-full flex flex-col bg-paper overflow-y-auto">
-        <StepIndicator currentStep={step} />
-
-        {/* Loading Overlay */}
-        {isAnalyzing && (
-          <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
-            <div className="bg-paper w-full max-w-sm rounded-xl border-2 border-pencil shadow-sketch p-6 text-center">
-              <div className="animate-spin text-sketch-orange mb-4 flex justify-center">
-                <Icons.Loader size={48} />
-              </div>
-              <p className="font-hand text-xl text-pencil mb-2">{LOADING_PHASES[loadingPhase]}</p>
-              <div className="w-full bg-pencil/20 h-2 rounded-full overflow-hidden mb-3">
-                <div
-                  className="h-full bg-sketch-orange transition-all duration-500"
-                  style={{ width: `${((loadingPhase + 1) / LOADING_PHASES.length) * 100}%` }}
-                />
-              </div>
-              {elapsedTime >= 5 && (
-                <p className="text-sm text-pencil/60 font-hand">Elapsed: {elapsedTime}s</p>
-              )}
-              {elapsedTime >= 15 && (
-                <button
-                  onClick={() => {
-                    setIsAnalyzing(false);
-                    setAnalysisError({ type: 'timeout', message: 'Analysis cancelled. Try again?' });
-                  }}
-                  className="mt-4 px-4 py-2 bg-sketch-red text-pencil font-bold font-hand rounded-lg border-2 border-pencil hover:bg-sketch-red/80 transition-all"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Error Display */}
-        {analysisError && !isAnalyzing && (
-          <div className="mx-4 mt-4 p-4 bg-sketch-red/20 border-2 border-sketch-red rounded-lg">
-            <div className="flex items-start gap-3">
-              <Icons.AlertCircle className="text-sketch-red flex-shrink-0 mt-0.5" size={20} />
-              <div className="flex-1">
-                <p className="font-bold text-pencil font-hand">{analysisError.message}</p>
-                <button
-                  onClick={runComparison}
-                  className="mt-2 px-4 py-1.5 bg-sketch-orange text-pencil font-bold font-hand text-sm rounded-lg border-2 border-pencil hover:shadow-sketch transition-all flex items-center gap-2"
-                >
-                  <Icons.RefreshCw size={14} />
-                  Retry
-                </button>
+        <div className="h-full flex flex-col bg-paper overflow-y-auto">
+          <StepIndicator currentStep={step} />
+          {isAnalyzing && (
+            <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
+              <div className="bg-paper w-full max-w-sm rounded-xl border-2 border-pencil shadow-sketch p-6 text-center">
+                <div className="animate-spin text-sketch-orange mb-4 flex justify-center"><Icons.Loader size={48} /></div>
+                <p className="font-hand text-xl text-pencil mb-2">{LOADING_PHASES[loadingPhase]}</p>
+                <div className="w-full bg-pencil/20 h-2 rounded-full overflow-hidden mb-3"><div className="h-full bg-sketch-orange transition-all duration-500" style={{ width: `${((loadingPhase + 1) / LOADING_PHASES.length) * 100}%` }} /></div>
+                {elapsedTime >= 5 && <p className="text-sm text-pencil/60 font-hand">Elapsed: {elapsedTime}s</p>}
+                {elapsedTime >= 15 && <button onClick={() => { setIsAnalyzing(false); setAnalysisError({ type: 'timeout', message: 'Analysis cancelled. Try again?' }); }} className="mt-4 px-4 py-2 bg-sketch-red text-pencil font-bold font-hand rounded-lg border-2 border-pencil hover:bg-sketch-red/80 transition-all">Cancel</button>}
               </div>
             </div>
-          </div>
-        )}
-
-        <div className="flex-1 p-4 md:p-6">
-        {/* Archive Selection Modal */}
-        {showArchiveModal && (
-          <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
-            <div className="bg-paper w-full max-w-lg max-h-[90vh] rounded-xl border-2 border-pencil shadow-sketch overflow-hidden flex flex-col">
-              <div className="p-4 border-b-2 border-pencil border-dashed flex justify-between items-center bg-white">
-                <h3 className="text-xl font-heading text-pencil">Select from Archive</h3>
-                <button
-                  onClick={() => setShowArchiveModal(false)}
-                  className="text-pencil hover:text-sketch-red font-bold"
-                >
-                  <Icons.X size={24} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-hidden">
-                <Camera
-                  selectMode={true}
-                  onSelectPhoto={handleArchiveSelect}
-                />
+          )}
+          {analysisError && !isAnalyzing && (
+            <div className="mx-4 mt-4 p-4 bg-sketch-red/20 border-2 border-sketch-red rounded-lg">
+              <div className="flex items-start gap-3">
+                <Icons.AlertCircle className="text-sketch-red flex-shrink-0 mt-0.5" size={20} />
+                <div className="flex-1">
+                  <p className="font-bold text-pencil font-hand">{analysisError.message}</p>
+                  <button onClick={runComparison} className="mt-2 px-4 py-1.5 bg-sketch-orange text-pencil font-bold font-hand text-sm rounded-lg border-2 border-pencil hover:shadow-sketch transition-all flex items-center gap-2"><Icons.RefreshCw size={14} /> Retry</button>
+                </div>
               </div>
             </div>
-          </div>
-        )}
-
-        <div className="max-w-md mx-auto w-full space-y-6">
-          <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
-            <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Your Reference</h2>
-            <button onClick={resetFlow} className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline">Cancel</button>
-          </div>
-          <div className="bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil">
-            <div className="bg-white border-2 border-pencil/10">
-              <img src={referenceImage!} alt="Reference" className="w-full aspect-[4/3] object-contain" />
+          )}
+          <div className="flex-1 p-4 md:p-6">
+            {showArchiveModal && (
+              <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
+                <div className="bg-paper w-full max-w-lg max-h-[90vh] rounded-xl border-2 border-pencil shadow-sketch overflow-hidden flex flex-col">
+                  <div className="p-4 border-b-2 border-pencil border-dashed flex justify-between items-center bg-white">
+                    <h3 className="text-xl font-heading text-pencil">Select from Archive</h3>
+                    <button onClick={() => setShowArchiveModal(false)} className="text-pencil hover:text-sketch-red font-bold"><Icons.X size={24} /></button>
+                  </div>
+                  <div className="flex-1 overflow-hidden"><Camera selectMode={true} onSelectPhoto={handleArchiveSelect} /></div>
+                </div>
+              </div>
+            )}
+            <div className="max-w-md mx-auto w-full space-y-6">
+              <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
+                <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Your Reference</h2>
+                <button onClick={resetFlow} className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline">Cancel</button>
+              </div>
+              <div className="bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil">
+                <div className="bg-white border-2 border-pencil/10"><img src={referenceImage!} alt="Reference" className="w-full aspect-[4/3] object-contain" /></div>
+              </div>
+              <div className="space-y-4">
+                <div onClick={() => fileInputRef.current?.click()} className={`border-4 border-dashed rounded-lg p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative overflow-hidden h-48 ${userDrawing ? 'border-sketch-blue bg-sketch-blue/10' : 'border-pencil/30 hover:border-pencil hover:bg-sketch-yellow/20'}`}>
+                  {userDrawing ? <img src={userDrawing} className="absolute inset-0 w-full h-full object-contain p-2" alt="upload" /> : <><div className="text-pencil mb-2"><Icons.Upload /></div><p className="text-pencil font-hand text-xl">Tap to upload your sketch</p></>}
+                </div>
+                <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
+                <button onClick={() => setShowArchiveModal(true)} className="w-full bg-white text-pencil py-3 rounded-xl font-bold text-lg font-hand border-2 border-pencil shadow-sketch hover:bg-sketch-yellow/20 transition-all flex items-center justify-center gap-2"><Icons.Image size={20} /> Select from Archive</button>
+                <button onClick={runComparison} disabled={!userDrawing || isAnalyzing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all flex items-center justify-center gap-2">{isAnalyzing ? <><Icons.Loader className="animate-spin" size={24} /> Analyzing...</> : 'Check Accuracy'}</button>
+              </div>
             </div>
-          </div>
-          <div className="space-y-4">
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-4 border-dashed rounded-lg p-8 flex flex-col items-center justify-center text-center transition-all cursor-pointer relative overflow-hidden h-48 ${userDrawing ? 'border-sketch-blue bg-sketch-blue/10' : 'border-pencil/30 hover:border-pencil hover:bg-sketch-yellow/20'}`}
-            >
-              {userDrawing ? (
-                <img src={userDrawing} className="absolute inset-0 w-full h-full object-contain p-2" alt="upload" />
-              ) : (
-                <>
-                  <div className="text-pencil mb-2"><Icons.Upload /></div>
-                  <p className="text-pencil font-hand text-xl">Tap to upload your sketch</p>
-                </>
-              )}
-            </div>
-            <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-
-            {/* From Archive Button */}
-            <button
-              onClick={() => setShowArchiveModal(true)}
-              className="w-full bg-white text-pencil py-3 rounded-xl font-bold text-lg font-hand border-2 border-pencil shadow-sketch hover:bg-sketch-yellow/20 transition-all flex items-center justify-center gap-2"
-            >
-              <Icons.Image size={20} />
-              Select from Archive
-            </button>
-
-            <button onClick={runComparison} disabled={!userDrawing || isAnalyzing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all flex items-center justify-center gap-2">
-              {isAnalyzing ? (
-                <>
-                  <Icons.Loader className="animate-spin" size={24} />
-                  Analyzing...
-                </>
-              ) : (
-                'Check Accuracy'
-              )}
-            </button>
           </div>
         </div>
-        </div>
-      </div>
-    );
+      );
   }
 
   return (
@@ -1179,112 +775,67 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
       <div className="max-w-2xl mx-auto w-full space-y-6">
         <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
           <h2 className="text-2xl md:text-3xl font-heading text-pencil">Accuracy Report</h2>
-          <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline flex items-center gap-1">
-            <Icons.Plus size={18} />
-            New Practice
-          </button>
+          <div className="flex gap-2">
+            {/* NEW: Save Button */}
+            <button
+              onClick={handleSaveResult}
+              disabled={isSaving || hasSaved}
+              className={`text-sm font-bold font-hand px-3 py-1.5 rounded-md border-2 transition-all flex items-center gap-1 ${hasSaved 
+                ? 'bg-green-100 text-green-700 border-green-700 cursor-default' 
+                : 'bg-white text-pencil border-pencil hover:bg-sketch-yellow'}`}
+            >
+              {hasSaved ? <Icons.Check size={16} /> : <Icons.Save size={16} />}
+              {hasSaved ? 'Saved' : 'Save Result'}
+            </button>
+            <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline flex items-center gap-1">
+              <Icons.Plus size={18} />
+              New Practice
+            </button>
+          </div>
         </div>
 
-        {/* Images Grid - stacks on mobile */}
+        {/* Images Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
-          {/* Reference Image - Now larger */}
           <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch transform md:-rotate-1">
             <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Reference Model</p>
             <img src={referenceImage!} className="w-full h-48 md:h-56 object-contain" alt="ref" />
           </div>
 
-          {/* User Drawing with Overlay */}
           <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch transform md:rotate-1">
             <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Your Drawing + Overlay</p>
             <div className="relative w-full h-48 md:h-56" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
               <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
-
-              {/* Reference Wireframe Overlay */}
-              <img
-                src={referenceLines!}
-                className="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-200"
-                style={{ opacity: overlayOpacity }}
-                alt="reference overlay"
-              />
-
-              {/* Perspective Lines Overlay */}
+              <img src={referenceLines!} className="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-200" style={{ opacity: overlayOpacity }} alt="reference overlay" />
               {showPerspectiveLines && captureMeta.width && captureMeta.height && (
-                <svg
-                  viewBox={`0 0 ${captureMeta.width} ${captureMeta.height}`}
-                  className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
-                >
-                  {captureMeta.horizonY !== null && (
-                    <line
-                      x1="-10000" y1={captureMeta.horizonY}
-                      x2="10000" y2={captureMeta.horizonY}
-                      stroke="red" strokeWidth="2" strokeDasharray="10 10" opacity="0.3"
-                    />
-                  )}
-
-                  {/* 1PT / 2PT Z-Edges (Orange) - Go to Center VP (1pt) or Right VP (2pt) */}
+                <svg viewBox={`0 0 ${captureMeta.width} ${captureMeta.height}`} className="absolute inset-0 w-full h-full pointer-events-none overflow-visible">
+                  {captureMeta.horizonY !== null && <line x1="-10000" y1={captureMeta.horizonY} x2="10000" y2={captureMeta.horizonY} stroke="red" strokeWidth="2" strokeDasharray="10 10" opacity="0.3" />}
                   {captureMeta.edgesZ && captureMeta.edgesZ.map((edge, i) => {
                     let targetVP = null;
-                    if (preset === '1pt') targetVP = captureMeta.vpLeft; // The single VP
-                    else targetVP = captureMeta.vpRight; // The Z VP
-
+                    if (preset === '1pt') targetVP = captureMeta.vpLeft;
+                    else targetVP = captureMeta.vpRight;
                     if (!targetVP) return null;
-
                     const midX = (edge[0] + edge[2]) / 2;
                     const midY = (edge[1] + edge[3]) / 2;
-
-                    return (
-                      <line
-                        key={`z-${i}`}
-                        x1={midX} y1={midY}
-                        x2={targetVP[0]} y2={targetVP[1]}
-                        stroke="orange" strokeWidth="1" opacity="0.2"
-                      />
-                    );
+                    return <line key={`z-${i}`} x1={midX} y1={midY} x2={targetVP[0]} y2={targetVP[1]} stroke="orange" strokeWidth="1" opacity="0.2" />;
                   })}
-
-                  {/* 2PT X-Edges (Cyan) - Go to Left VP */}
                   {captureMeta.edgesX && captureMeta.edgesX.map((edge, i) => {
                     const targetVP = captureMeta.vpLeft;
                     if (preset !== '2pt' || !targetVP) return null;
-
                     const midX = (edge[0] + edge[2]) / 2;
                     const midY = (edge[1] + edge[3]) / 2;
-
-                    return (
-                      <line
-                        key={`x-${i}`}
-                        x1={midX} y1={midY}
-                        x2={targetVP[0]} y2={targetVP[1]}
-                        stroke="cyan" strokeWidth="1" opacity="0.2"
-                      />
-                    );
+                    return <line key={`x-${i}`} x1={midX} y1={midY} x2={targetVP[0]} y2={targetVP[1]} stroke="cyan" strokeWidth="1" opacity="0.2" />;
                   })}
                 </svg>
               )}
             </div>
 
-            {/* Overlay Controls - Always visible */}
             <div className="mt-3 pt-3 border-t-2 border-pencil/20 border-dashed space-y-2">
-              {/* Opacity Slider */}
               <div className="flex items-center gap-3">
                 <span className="text-xs font-bold font-hand text-pencil whitespace-nowrap">Overlay: {Math.round(overlayOpacity * 100)}%</span>
-                <input
-                  type="range"
-                  min="0" max="1" step="0.1"
-                  value={overlayOpacity}
-                  onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
-                  className="flex-1 h-2 bg-pencil/20 rounded-lg appearance-none cursor-pointer accent-sketch-orange"
-                />
+                <input type="range" min="0" max="1" step="0.1" value={overlayOpacity} onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))} className="flex-1 h-2 bg-pencil/20 rounded-lg appearance-none cursor-pointer accent-sketch-orange" />
               </div>
-
-              {/* Perspective Lines Toggle */}
               <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showPerspectiveLines}
-                  onChange={(e) => setShowPerspectiveLines(e.target.checked)}
-                  className="w-4 h-4 rounded border-2 border-pencil accent-sketch-blue"
-                />
+                <input type="checkbox" checked={showPerspectiveLines} onChange={(e) => setShowPerspectiveLines(e.target.checked)} className="w-4 h-4 rounded border-2 border-pencil accent-sketch-blue" />
                 <span className="text-xs font-bold font-hand text-pencil">Show perspective guides</span>
               </label>
             </div>
@@ -1293,7 +844,6 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
         <div className="bg-paper rounded-sm shadow-sketch border-2 border-pencil p-6 min-h-[300px] relative">
           <div className="absolute -top-3 -left-3 w-8 h-8 rounded-full bg-sketch-yellow border-2 border-pencil z-0"></div>
           <div className="absolute -bottom-3 -right-3 w-12 h-12 rounded-full bg-sketch-blue border-2 border-pencil z-0"></div>
-
           <div className="relative z-10">
             {isAnalyzing ? (
               <div className="flex flex-col items-center justify-center h-48 gap-4 text-pencil">

@@ -1,3 +1,5 @@
+// services/photoStorage.ts
+
 const DB_NAME = 'art-tutor-photos';
 const DB_VERSION = 1;
 const STORE_NAME = 'photos';
@@ -7,11 +9,13 @@ export interface StoredPhoto {
   imageData: string; // base64
   timestamp: number;
   date: string; // YYYY-MM-DD for grouping
+  feedback?: string;
+  score?: number; // Optional 1-100 score if we want to add that later
 }
 
 export interface PhotosByDate {
   date: string;
-  label: string; // "Today", "Yesterday", "Feb 1, 2026"
+  label: string;
   photos: StoredPhoto[];
 }
 
@@ -46,14 +50,18 @@ function getDB(): Promise<IDBDatabase> {
   });
 }
 
-export async function savePhoto(imageData: string): Promise<StoredPhoto> {
+
+export async function savePhoto(imageData: string, feedback?: string, score?: number): Promise<StoredPhoto> {
   const db = await getDB();
   const now = new Date();
+  
   const photo: StoredPhoto = {
     id: `photo-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     imageData,
     timestamp: now.getTime(),
     date: now.toISOString().split('T')[0], // YYYY-MM-DD
+    feedback, 
+    score     
   };
 
   return new Promise((resolve, reject) => {
@@ -128,7 +136,6 @@ function getDateLabel(dateStr: string): string {
   if (dateStr === todayStr) return 'Today';
   if (dateStr === yesterdayStr) return 'Yesterday';
 
-  // Format as "Feb 1, 2026"
   const date = new Date(dateStr + 'T12:00:00');
   return date.toLocaleDateString('en-US', {
     month: 'short',
@@ -139,8 +146,6 @@ function getDateLabel(dateStr: string): string {
 
 export async function getPhotosByDate(): Promise<PhotosByDate[]> {
   const photos = await getAllPhotos();
-
-  // Group by date
   const grouped = new Map<string, StoredPhoto[]>();
 
   for (const photo of photos) {
@@ -149,7 +154,6 @@ export async function getPhotosByDate(): Promise<PhotosByDate[]> {
     grouped.set(photo.date, existing);
   }
 
-  // Convert to array sorted by date (newest first)
   const result: PhotosByDate[] = [];
   const sortedDates = Array.from(grouped.keys()).sort().reverse();
 

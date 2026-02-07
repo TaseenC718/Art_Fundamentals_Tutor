@@ -631,6 +631,59 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
 
 type Step = 'pose' | 'draw' | 'result';
 
+// Step indicator component
+const STEP_CONFIG = [
+  { key: 'pose', label: 'Set up your reference', icon: Icons.Box },
+  { key: 'draw', label: 'Upload your drawing', icon: Icons.Upload },
+  { key: 'result', label: 'See results', icon: Icons.CheckCircle }
+] as const;
+
+interface StepIndicatorProps {
+  currentStep: Step;
+}
+
+const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep }) => {
+  const currentIndex = STEP_CONFIG.findIndex(s => s.key === currentStep);
+
+  return (
+    <div className="flex items-center justify-center gap-1 md:gap-2 py-3 px-2 bg-paper border-b-2 border-pencil border-dashed">
+      {STEP_CONFIG.map((stepInfo, index) => {
+        const Icon = stepInfo.icon;
+        const isActive = index === currentIndex;
+        const isCompleted = index < currentIndex;
+
+        return (
+          <React.Fragment key={stepInfo.key}>
+            <div className={`flex items-center gap-1 md:gap-2 px-2 md:px-3 py-1.5 rounded-lg transition-all ${
+              isActive
+                ? 'bg-sketch-orange border-2 border-pencil shadow-sm transform -rotate-1'
+                : isCompleted
+                  ? 'bg-sketch-blue/30 border-2 border-pencil/30'
+                  : 'bg-paper border-2 border-pencil/20'
+            }`}>
+              <div className={`flex items-center justify-center w-6 h-6 rounded-full text-sm font-bold ${
+                isActive ? 'bg-pencil text-paper' : isCompleted ? 'bg-sketch-blue text-pencil' : 'bg-pencil/20 text-pencil/50'
+              }`}>
+                {isCompleted ? <Icons.Check size={14} /> : index + 1}
+              </div>
+              <span className={`hidden md:block text-sm font-hand ${
+                isActive ? 'text-pencil font-bold' : isCompleted ? 'text-pencil/70' : 'text-pencil/40'
+              }`}>
+                {stepInfo.label}
+              </span>
+            </div>
+            {index < STEP_CONFIG.length - 1 && (
+              <div className={`w-4 md:w-8 h-0.5 ${
+                index < currentIndex ? 'bg-sketch-blue' : 'bg-pencil/20'
+              }`} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+};
+
 interface CritiqueZoneProps {
   difficulty?: 'beginner' | 'intermediate' | 'advanced';
 }
@@ -661,6 +714,11 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   const [overlayOpacity, setOverlayOpacity] = useState(0.5);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState(0);
+  const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const [analysisError, setAnalysisError] = useState<{ type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string } | null>(null);
+  const [showPerspectiveLines, setShowPerspectiveLines] = useState(true);
 
   const [fov, setFov] = useState(55);
   const [cameraDistance, setCameraDistance] = useState(15);
@@ -678,6 +736,42 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
       setShowGuides(DIFFICULTY_CONFIG[difficultyProp].showGuides);
     }
   }, [difficultyProp]);
+
+  // Loading phase messages
+  const LOADING_PHASES = [
+    "Analyzing your lines...",
+    "Checking convergence points...",
+    "Comparing with reference...",
+    "Generating feedback..."
+  ];
+
+  // Cycle through loading phases
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setLoadingPhase(0);
+      setLoadingStartTime(null);
+      setElapsedTime(0);
+      return;
+    }
+
+    setLoadingStartTime(Date.now());
+    setLoadingPhase(0);
+
+    const phaseInterval = setInterval(() => {
+      setLoadingPhase(prev => (prev + 1) % LOADING_PHASES.length);
+    }, 2500);
+
+    const timeInterval = setInterval(() => {
+      if (loadingStartTime) {
+        setElapsedTime(Math.floor((Date.now() - loadingStartTime) / 1000));
+      }
+    }, 1000);
+
+    return () => {
+      clearInterval(phaseInterval);
+      clearInterval(timeInterval);
+    };
+  }, [isAnalyzing, loadingStartTime]);
 
   const [cubePos, setCubePos] = useState<[number, number, number]>([0, 0, 0]);
   const [cubeRotation, setCubeRotation] = useState(0);
@@ -717,25 +811,45 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   const runComparison = async () => {
     if (!referenceImage || !userDrawing) return;
     setIsAnalyzing(true);
-    setStep('result');
+    setAnalysisError(null);
+    // Stay on 'draw' step while analyzing - show inline loading overlay
+
     try {
       const result = await compareDrawings(referenceImage, userDrawing);
-      // Handle both string (error case) and object (success case)
-      if (typeof result === 'string') {
-        setAnalysis(result);
-        setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
-      } else {
-        setAnalysis(result.feedback);
-        setLineSets({
-          leftSet: result.leftSet || [],
-          rightSet: result.rightSet || [],
-          verticalSet: result.verticalSet || []
-        });
-        // Record critique completion for progress tracking
-        recordCritique();
+
+      // Check if we got valid feedback
+      if (!result.feedback || result.feedback.includes("Failed to compare")) {
+        setAnalysisError({ type: 'parse', message: 'Could not parse the AI response. Please try again.' });
+        setIsAnalyzing(false);
+        return;
       }
-    } catch (error) {
-      setAnalysis("Error analyzing images. Please try again.");
+
+      setAnalysis(result.feedback);
+      setLineSets({
+        leftSet: result.leftSet || [],
+        rightSet: result.rightSet || [],
+        verticalSet: result.verticalSet || []
+      });
+      // Record critique completion for progress tracking
+      recordCritique();
+      // Only transition to result step on success
+      setStep('result');
+    } catch (error: any) {
+      // Distinguish error types
+      let errorInfo: { type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string };
+
+      if (error?.message?.includes('network') || error?.message?.includes('fetch')) {
+        errorInfo = { type: 'network', message: 'Network error. Please check your connection and try again.' };
+      } else if (error?.message?.includes('timeout') || error?.name === 'AbortError') {
+        errorInfo = { type: 'timeout', message: 'Request timed out. The AI is taking too long to respond.' };
+      } else if (error?.message?.includes('JSON') || error?.message?.includes('parse')) {
+        errorInfo = { type: 'parse', message: 'Failed to parse AI response. Please try again.' };
+      } else {
+        errorInfo = { type: 'unknown', message: 'Something went wrong. Please try again.' };
+      }
+
+      setAnalysisError(errorInfo);
+      setAnalysis(null);
       setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
     } finally {
       setIsAnalyzing(false);
@@ -751,6 +865,8 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
     setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
     setCaptureMeta({ vpLeft: null, vpRight: null, horizonY: null });
     setIsAnalyzing(false);
+    setAnalysisError(null);
+    setShowPerspectiveLines(true);
   };
 
   const handlePresetChange = (newPreset: string) => {
@@ -773,6 +889,7 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   if (step === 'pose') {
     return (
       <div className="h-full flex flex-col bg-paper relative">
+        <StepIndicator currentStep={step} />
         <div className="flex-1 w-full relative">
           <Canvas gl={{ preserveDrawingBuffer: true }}>
             <Suspense fallback={null}>
@@ -925,7 +1042,61 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
 
   if (step === 'draw') {
     return (
-      <div className="h-full flex flex-col bg-paper p-4 md:p-6 overflow-y-auto">
+      <div className="h-full flex flex-col bg-paper overflow-y-auto">
+        <StepIndicator currentStep={step} />
+
+        {/* Loading Overlay */}
+        {isAnalyzing && (
+          <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
+            <div className="bg-paper w-full max-w-sm rounded-xl border-2 border-pencil shadow-sketch p-6 text-center">
+              <div className="animate-spin text-sketch-orange mb-4 flex justify-center">
+                <Icons.Loader size={48} />
+              </div>
+              <p className="font-hand text-xl text-pencil mb-2">{LOADING_PHASES[loadingPhase]}</p>
+              <div className="w-full bg-pencil/20 h-2 rounded-full overflow-hidden mb-3">
+                <div
+                  className="h-full bg-sketch-orange transition-all duration-500"
+                  style={{ width: `${((loadingPhase + 1) / LOADING_PHASES.length) * 100}%` }}
+                />
+              </div>
+              {elapsedTime >= 5 && (
+                <p className="text-sm text-pencil/60 font-hand">Elapsed: {elapsedTime}s</p>
+              )}
+              {elapsedTime >= 15 && (
+                <button
+                  onClick={() => {
+                    setIsAnalyzing(false);
+                    setAnalysisError({ type: 'timeout', message: 'Analysis cancelled. Try again?' });
+                  }}
+                  className="mt-4 px-4 py-2 bg-sketch-red text-pencil font-bold font-hand rounded-lg border-2 border-pencil hover:bg-sketch-red/80 transition-all"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Error Display */}
+        {analysisError && !isAnalyzing && (
+          <div className="mx-4 mt-4 p-4 bg-sketch-red/20 border-2 border-sketch-red rounded-lg">
+            <div className="flex items-start gap-3">
+              <Icons.AlertCircle className="text-sketch-red flex-shrink-0 mt-0.5" size={20} />
+              <div className="flex-1">
+                <p className="font-bold text-pencil font-hand">{analysisError.message}</p>
+                <button
+                  onClick={runComparison}
+                  className="mt-2 px-4 py-1.5 bg-sketch-orange text-pencil font-bold font-hand text-sm rounded-lg border-2 border-pencil hover:shadow-sketch transition-all flex items-center gap-2"
+                >
+                  <Icons.RefreshCw size={14} />
+                  Retry
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="flex-1 p-4 md:p-6">
         {/* Archive Selection Modal */}
         {showArchiveModal && (
           <div className="fixed inset-0 z-50 bg-pencil/80 flex items-center justify-center p-4">
@@ -984,40 +1155,60 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
               Select from Archive
             </button>
 
-            <button onClick={runComparison} disabled={!userDrawing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all">Check Accuracy</button>
+            <button onClick={runComparison} disabled={!userDrawing || isAnalyzing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all flex items-center justify-center gap-2">
+              {isAnalyzing ? (
+                <>
+                  <Icons.Loader className="animate-spin" size={24} />
+                  Analyzing...
+                </>
+              ) : (
+                'Check Accuracy'
+              )}
+            </button>
           </div>
+        </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-full bg-paper p-4 md:p-6 overflow-y-auto">
-      <div className="max-w-md mx-auto w-full space-y-6">
+    <div className="h-full bg-paper overflow-y-auto flex flex-col">
+      <StepIndicator currentStep={step} />
+      <div className="flex-1 p-4 md:p-6">
+      <div className="max-w-2xl mx-auto w-full space-y-6">
         <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
-          <h2 className="text-3xl font-heading text-pencil">Accuracy Report</h2>
-          <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline">New Practice</button>
+          <h2 className="text-2xl md:text-3xl font-heading text-pencil">Accuracy Report</h2>
+          <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline flex items-center gap-1">
+            <Icons.Plus size={18} />
+            New Practice
+          </button>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform -rotate-1">
-            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">Model</p>
-            <img src={referenceImage!} className="w-full h-24 object-contain" alt="ref" />
+
+        {/* Images Grid - stacks on mobile */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
+          {/* Reference Image - Now larger */}
+          <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch transform md:-rotate-1">
+            <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Reference Model</p>
+            <img src={referenceImage!} className="w-full h-48 md:h-56 object-contain" alt="ref" />
           </div>
-          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform rotate-1 relative group">
-            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">You & True Perspective</p>
-            <div className="relative w-full" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
+
+          {/* User Drawing with Overlay */}
+          <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch transform md:rotate-1">
+            <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Your Drawing + Overlay</p>
+            <div className="relative w-full h-48 md:h-56" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
               <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
 
               {/* Reference Wireframe Overlay */}
               <img
                 src={referenceLines!}
-                className="absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-200"
+                className="absolute inset-0 w-full h-full object-contain pointer-events-none transition-opacity duration-200"
                 style={{ opacity: overlayOpacity }}
                 alt="reference overlay"
               />
 
               {/* Perspective Lines Overlay */}
-              {captureMeta.width && captureMeta.height && (
+              {showPerspectiveLines && captureMeta.width && captureMeta.height && (
                 <svg
                   viewBox={`0 0 ${captureMeta.width} ${captureMeta.height}`}
                   className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
@@ -1070,21 +1261,33 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
                   })}
                 </svg>
               )}
-
-              {/* Opacity Control Hint */}
-              <div className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 text-white text-[10px] px-1 rounded pointer-events-none">
-                Ref Opacity: {Math.round(overlayOpacity * 100)}%
-              </div>
             </div>
 
-            {/* Range Input for Opacity */}
-            <input
-              type="range"
-              min="0" max="1" step="0.1"
-              value={overlayOpacity}
-              onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
-              className="absolute -bottom-6 left-0 right-0 w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            />
+            {/* Overlay Controls - Always visible */}
+            <div className="mt-3 pt-3 border-t-2 border-pencil/20 border-dashed space-y-2">
+              {/* Opacity Slider */}
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold font-hand text-pencil whitespace-nowrap">Overlay: {Math.round(overlayOpacity * 100)}%</span>
+                <input
+                  type="range"
+                  min="0" max="1" step="0.1"
+                  value={overlayOpacity}
+                  onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
+                  className="flex-1 h-2 bg-pencil/20 rounded-lg appearance-none cursor-pointer accent-sketch-orange"
+                />
+              </div>
+
+              {/* Perspective Lines Toggle */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={showPerspectiveLines}
+                  onChange={(e) => setShowPerspectiveLines(e.target.checked)}
+                  className="w-4 h-4 rounded border-2 border-pencil accent-sketch-blue"
+                />
+                <span className="text-xs font-bold font-hand text-pencil">Show perspective guides</span>
+              </label>
+            </div>
           </div>
         </div>
         <div className="bg-paper rounded-sm shadow-sketch border-2 border-pencil p-6 min-h-[300px] relative">
@@ -1102,6 +1305,7 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
             )}
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

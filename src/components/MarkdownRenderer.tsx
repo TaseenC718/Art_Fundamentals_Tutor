@@ -33,7 +33,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, className 
           blockquote({ children }) {
             return <blockquote className="border-l-4 border-sketch-blue pl-4 italic text-pencil my-4 bg-sketch-blue/10 py-2 rounded-r-sm font-hand">{children}</blockquote>
           }
-        }}
+        } as any}
       >
         {content}
       </ReactMarkdown>

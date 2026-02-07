@@ -1,10 +1,10 @@
 import React, { useState, useRef, Suspense, useEffect, useMemo } from 'react';
 import { Canvas, useThree, useFrame, ThreeEvent } from '@react-three/fiber';
-import { OrbitControls, Environment, useHelper } from '@react-three/drei';
+import { OrbitControls, Environment, useHelper, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import * as Icons from 'lucide-react';
 import MarkdownRenderer from './MarkdownRenderer';
-import { compareDrawings } from '../services/geminiService';
+import { compareDrawings, scanImageStructure, compareLineSets } from '../services/geminiService';
 
 // --- Helper Functions for VP Calculation ---
 const HORIZON_Z = -100; // Far distance for horizon line
@@ -363,7 +363,7 @@ const VPHelpers = ({ camera, rotation, cubePos, preset }: VPHelpersProps) => {
 };
 
 interface SceneContentProps {
-  onCapture: (data: string, lines: string, meta?: any) => void;
+  onCapture: (data: string, lines: string, analysis: string, meta?: any) => void;
   triggerCapture: boolean;
   showGuides: boolean;
   preset: string;
@@ -392,8 +392,13 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
   useEffect(() => {
     if (triggerCapture) {
       const originalInfo = {
-        background: scene.background
+        background: scene.background,
+        pixelRatio: gl.getPixelRatio()
       };
+
+      // --- BOOST RESOLUTION FOR AI ---
+      gl.setPixelRatio(3);
+      gl.setSize(gl.domElement.clientWidth, gl.domElement.clientHeight, false);
 
       // --- 1. Solid Render (Reference) ---
       // Force white background for "paper" look
@@ -407,11 +412,14 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         tempCanvas.height = height;
         const ctx = tempCanvas.getContext('2d');
         if (!ctx) return null;
+        // The source buffer is big now.
+        // minX etc are in the new coordinate space (calculated below).
         ctx.drawImage(gl.domElement, minX, minY, width, height, 0, 0, width, height);
         return tempCanvas.toDataURL('image/png');
       };
 
       // Calculate Cube Bounding Box in Screen Space
+      // gl.domElement.width is now the boosted width
       const width = gl.domElement.width;
       const height = gl.domElement.height;
       const halfSize = 1.25; // Half of cube size (2.5)
@@ -505,12 +513,20 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
 
       const solidData = getCroppedImage(minX, minY, cropWidth, cropHeight);
 
-      // --- 2. Wireframe Render (Lines) ---
-      // Transparent BG
-      scene.background = null;
-      // Hide solid faces
+      // --- 2. Analysis Render (Wireframe on White) ---
+      // This gives the AI a clean blueprint
+      scene.background = new THREE.Color('#ffffff');
       if (cubeMaterial.current) cubeMaterial.current.visible = false;
 
+      gl.clear();
+      gl.render(scene, camera);
+
+      const analysisData = getCroppedImage(minX, minY, cropWidth, cropHeight);
+
+      // --- 3. Wireframe Render (Overlay) ---
+      // Transparent BG for UI
+      scene.background = null;
+      // Faces still hidden
       gl.clear();
       gl.render(scene, camera);
 
@@ -519,6 +535,7 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
       // Restore
       if (cubeMaterial.current) cubeMaterial.current.visible = true;
       scene.background = originalInfo.background;
+      gl.setPixelRatio(originalInfo.pixelRatio); // Restore original DPR
 
       // --- Calculate VP Positions (Screen Space) ---
       const camZ = camera.position.z;
@@ -580,8 +597,8 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         height: cropHeight
       };
 
-      if (solidData && wireframeData) {
-        onCapture(solidData, wireframeData, meta);
+      if (solidData && wireframeData && analysisData) {
+        onCapture(solidData, wireframeData, analysisData, meta);
       }
     }
   }, [triggerCapture, gl, scene, camera, onCapture, cubePos, cubeRotation, preset]);
@@ -667,10 +684,26 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
         ) : (
           <meshStandardMaterial ref={cubeMaterial as any} color="#ffffff" roughness={0.9} metalness={0.1} />
         )}
-        <lineSegments>
-          <edgesGeometry args={[edgeGeometry]} />
-          <lineBasicMaterial color="#2D2D2D" linewidth={2} />
-        </lineSegments>
+        {/* Manual Thick Lines using drei/Line */}
+        <Line
+          points={[
+            [-1.25, -1.25, -1.25], [1.25, -1.25, -1.25],
+            [1.25, -1.25, -1.25], [1.25, -1.25, 1.25],
+            [1.25, -1.25, 1.25], [-1.25, -1.25, 1.25],
+            [-1.25, -1.25, 1.25], [-1.25, -1.25, -1.25],
+            [-1.25, 1.25, -1.25], [1.25, 1.25, -1.25],
+            [1.25, 1.25, -1.25], [1.25, 1.25, 1.25],
+            [1.25, 1.25, 1.25], [-1.25, 1.25, 1.25],
+            [-1.25, 1.25, 1.25], [-1.25, 1.25, -1.25],
+            [-1.25, -1.25, -1.25], [-1.25, 1.25, -1.25],
+            [1.25, -1.25, -1.25], [1.25, 1.25, -1.25],
+            [1.25, -1.25, 1.25], [1.25, 1.25, 1.25],
+            [-1.25, -1.25, 1.25], [-1.25, 1.25, 1.25]
+          ]}
+          segments
+          color="#1a1a1a"
+          lineWidth={2}
+        />
       </mesh>
 
       <mesh
@@ -689,20 +722,270 @@ const SceneContent = ({ onCapture, triggerCapture, showGuides, preset, cubePos, 
   );
 };
 
-type Step = 'pose' | 'draw' | 'result';
+// --- Image Cropper Component ---
+interface ImageCropperProps {
+  imageSrc: string;
+  targetAspectRatio: number; // width / height
+  targetWidth?: number; // Exact output width
+  targetHeight?: number; // Exact output height
+  onConfirm: (croppedImage: string) => void;
+  onCancel: () => void;
+}
+
+const ScanningOverlay = ({ edgesX, edgesZ }: { edgesX: number[][], edgesZ: number[][] }) => {
+  const [visibleCount, setVisibleCount] = useState(0);
+
+  // Flatten all edges
+  const allEdges = useMemo(() => {
+    return [
+      ...edgesX.map(e => ({ ...e, color: 'cyan' })),
+      ...edgesZ.map(e => ({ ...e, color: 'orange' }))
+    ];
+  }, [edgesX, edgesZ]);
+
+  useEffect(() => {
+    // Reset
+    setVisibleCount(0);
+    const interval = setInterval(() => {
+      setVisibleCount(prev => {
+        // Loop: If we reach end, pause briefly then restart
+        if (prev >= allEdges.length + 20) return 0; // +20 ticks pause
+        return prev + 1;
+      });
+    }, 50); // Speed of edge appearance
+    return () => clearInterval(interval);
+  }, [allEdges]);
+
+  return (
+    <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+      {allEdges.slice(0, visibleCount).filter((_, i) => i < allEdges.length).map((edge, i) => (
+        <line
+          key={i}
+          x1={edge[0]} y1={edge[1]}
+          x2={edge[2]} y2={edge[3]}
+          stroke={edge.color}
+          strokeWidth="4"
+          strokeLinecap="round"
+          className="animate-pulse"
+        />
+      ))}
+    </svg>
+  );
+};
+
+// Generic "Laser" scan for User Drawing
+const LaserScanOverlay = () => {
+  return (
+    <div className="absolute inset-0 pointer-events-none overflow-hidden rounded">
+      <div className="w-full h-full bg-gradient-to-b from-transparent via-sketch-blue/20 to-transparent"
+        style={{
+          animation: 'scan 2s linear infinite',
+          backgroundSize: '100% 200%',
+        }}>
+      </div>
+      <div className="absolute left-0 right-0 h-1 bg-sketch-blue/50 shadow-[0_0_15px_rgba(59,130,246,0.8)]"
+        style={{ animation: 'scan-line 2s linear infinite' }}>
+      </div>
+      <style>{`
+                @keyframes scan {
+                    0% { transform: translateY(-100%); }
+                    100% { transform: translateY(100%); }
+                }
+                @keyframes scan-line {
+                    0% { top: 0%; opacity: 0; }
+                    10% { opacity: 1; }
+                    90% { opacity: 1; }
+                    100% { top: 100%; opacity: 0; }
+                }
+            `}</style>
+    </div>
+  );
+};
+
+const ImageCropper = ({ imageSrc, targetAspectRatio, targetWidth, targetHeight, onConfirm, onCancel }: ImageCropperProps) => {
+  const [scale, setScale] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
+
+  // Reset when image changes
+  useEffect(() => {
+    setScale(1);
+    setPosition({ x: 0, y: 0 });
+  }, [imageSrc]);
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    setIsDragging(true);
+    setDragStart({ x: e.clientX - position.x, y: e.clientY - position.y });
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+    setPosition({
+      x: e.clientX - dragStart.x,
+      y: e.clientY - dragStart.y
+    });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
+    setIsDragging(false);
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+  };
+
+  const handleConfirm = () => {
+    if (!imgRef.current || !containerRef.current) return;
+
+    const canvas = document.createElement('canvas');
+    // We want reasonably high resolution
+    let outputWidth = 1000;
+    let outputHeight = 1000 / targetAspectRatio;
+
+    // If exact target dimensions provided, use them
+    if (targetWidth && targetHeight) {
+      outputWidth = targetWidth;
+      outputHeight = targetHeight;
+    }
+
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // The container is the "viewport". 
+    // We need to map the visible portion of the image in the viewport to the canvas.
+    // The image has transform: translate(position.x, position.y) scale(scale).
+    // Viewport size:
+    const viewportRect = containerRef.current.getBoundingClientRect();
+
+    // Calculate image render rect relative to viewport
+    // Center is (viewport.w/2, viewport.h/2).
+    // Initial image position is centered.
+    // But our simple drag implementation uses translate relative to top-left?
+    // Let's refine the CSS/Logic mapping.
+    // CSS: Image is absolute, centered?
+    // Let's rely on the DOM rects.
+
+    const imgRect = imgRef.current.getBoundingClientRect();
+
+    // Scale factor between Viewport pixel size and Output Canvas size
+    const DOMtoCanvasScale = outputWidth / viewportRect.width;
+
+    // Source (Image) coordinates:
+    // We want the part of the image overlapping with viewportRect.
+    // Intersection of imgRect and viewportRect.
+
+    // Actually, easier way: 
+    // Draw the image onto the canvas using the same transforms?
+    // Canvas (0,0) corresponds to Viewport (0,0).
+
+    ctx.fillStyle = 'white';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Calculate position relative to viewport
+    const x = (imgRect.left - viewportRect.left) * DOMtoCanvasScale;
+    const y = (imgRect.top - viewportRect.top) * DOMtoCanvasScale;
+    const w = imgRect.width * DOMtoCanvasScale;
+    const h = imgRect.height * DOMtoCanvasScale;
+
+    ctx.drawImage(imgRef.current, x, y, w, h);
+
+    onConfirm(canvas.toDataURL('image/png'));
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-gray-100 rounded-sm p-4">
+      <div className="flex justify-between items-center mb-2">
+        <h3 className="font-hand font-bold text-lg text-pencil">Crop User Photo</h3>
+        <p className="text-xs text-pencil/60">Drag & Zoom to fit the cube inside the box.</p>
+      </div>
+
+      <div className="flex-1 relative flex items-center justify-center bg-gray-300 overflow-hidden border-2 border-pencil rounded shadow-inner select-none">
+
+        {/* Viewport Mask / Reference Frame */}
+        {/* We fix the viewport to the target Aspect Ratio using CSS aspect-ratio */}
+        <div
+          ref={containerRef}
+          className="relative bg-white overflow-hidden shadow-2xl border-4 border-sketch-blue border-dashed"
+          style={{
+            aspectRatio: `${targetAspectRatio}`,
+            width: targetAspectRatio >= 1 ? '80%' : 'auto',
+            height: targetAspectRatio < 1 ? '80%' : 'auto',
+            maxHeight: '400px',
+            maxWidth: '100%'
+          }}
+        >
+          <img
+            ref={imgRef}
+            src={imageSrc}
+            alt="crop target"
+            draggable={false}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            style={{
+              transform: `translate(${position.x}px, ${position.y}px) scale(${scale})`,
+              transformOrigin: 'center',
+              cursor: isDragging ? 'grabbing' : 'grab',
+              maxWidth: '100%',
+              maxHeight: '100%',
+              width: 'auto',
+              height: 'auto',
+              objectFit: 'contain',
+              userSelect: 'none',
+              touchAction: 'none'
+            }}
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 flex items-center gap-4">
+        <Icons.ZoomOut size={20} className="text-pencil" />
+        <input
+          type="range"
+          min="0.5" max="3" step="0.1"
+          value={scale}
+          onChange={(e) => setScale(parseFloat(e.target.value))}
+          className="flex-1 accent-sketch-blue"
+        />
+        <Icons.ZoomIn size={20} className="text-pencil" />
+      </div>
+
+      <div className="mt-4 flex gap-4">
+        <button onClick={onCancel} className="flex-1 btn-secondary">
+          Cancel
+        </button>
+        <button onClick={handleConfirm} className="flex-1 btn-primary">
+          Confirm Crop
+        </button>
+      </div>
+    </div>
+  );
+};
+
+type Step = 'pose' | 'draw' | 'crop' | 'result';
 
 const CritiqueZone: React.FC = () => {
   const [step, setStep] = useState<Step>('pose');
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referenceLines, setReferenceLines] = useState<string | null>(null);
+  const [referenceAnalysis, setReferenceAnalysis] = useState<string | null>(null);
   const [userDrawing, setUserDrawing] = useState<string | null>(null);
+  const [tempUploadedImage, setTempUploadedImage] = useState<string | null>(null);
   const [triggerCapture, setTriggerCapture] = useState(false);
   const [analysis, setAnalysis] = useState<string | null>(null);
   const [lineSets, setLineSets] = useState<{
     leftSet: { start: [number, number], end: [number, number] }[],
     rightSet: { start: [number, number], end: [number, number] }[],
-    verticalSet: { start: [number, number], end: [number, number] }[]
-  }>({ leftSet: [], rightSet: [], verticalSet: [] });
+    verticalSet: { start: [number, number], end: [number, number] }[],
+    refLeftSet: { start: [number, number], end: [number, number] }[],
+    refRightSet: { start: [number, number], end: [number, number] }[],
+    refVerticalSet: { start: [number, number], end: [number, number] }[]
+  }>({ leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] });
+  const [grade, setGrade] = useState<string | null>(null);
 
   const [captureMeta, setCaptureMeta] = useState<{
     vpLeft: [number, number] | null,
@@ -714,12 +997,17 @@ const CritiqueZone: React.FC = () => {
     height?: number
   }>({ vpLeft: null, vpRight: null, horizonY: null });
 
-  const [overlayOpacity, setOverlayOpacity] = useState(0.5);
+  const [showAIVision, setShowAIVision] = useState(true);
+  const [showRefVision, setShowRefVision] = useState(true);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
+  const [loadingMessage, setLoadingMessage] = useState('Analyzing perspective geometry...');
+
+
+
   const [fov, setFov] = useState(55);
-  const [cameraDistance, setCameraDistance] = useState(15);
+  const [cubeDepth, setCubeDepth] = useState(0);
   const [cameraHeight, setCameraHeight] = useState(0);
 
   const [preset, setPreset] = useState('1pt');
@@ -730,9 +1018,10 @@ const CritiqueZone: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleCapture = (data: string, lines: string, meta?: any) => {
+  const handleCapture = (data: string, lines: string, analysis: string, meta?: any) => {
     setReferenceImage(data);
     setReferenceLines(lines);
+    setReferenceAnalysis(analysis);
     if (meta) setCaptureMeta(meta);
     setTriggerCapture(false);
     setStep('draw');
@@ -747,33 +1036,71 @@ const CritiqueZone: React.FC = () => {
     if (file && file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (ev) => {
-        setUserDrawing(ev.target?.result as string);
+        // setUserDrawing(ev.target?.result as string); // OLD
+        setTempUploadedImage(ev.target?.result as string);
+        setStep('crop'); // Go to crop step
       };
       reader.readAsDataURL(file);
     }
   };
 
-  const runComparison = async () => {
-    if (!referenceImage || !userDrawing) return;
+  const handleCropConfirm = (croppedImage: string) => {
+    setUserDrawing(croppedImage);
+    setTempUploadedImage(null);
+    runComparison(croppedImage); // Pass image directly to ensure state is ready? Or use useEffect.
+    // Actually, setting state is async. Better to trigger comparison via effect or pass data.
+    // The existing runComparison uses state `userDrawing`.
+    // Let's modify runComparison to accept optional arg.
+  };
+
+  const runComparison = async (overrideUserDrawing?: string) => {
+    const drawingToUse = overrideUserDrawing || userDrawing;
+    if (!referenceImage || !drawingToUse) return;
     setIsAnalyzing(true);
+    // userDrawing state might not be updated yet if called from crop confirm
+    // so we assume drawingToUse is valid
+    if (drawingToUse !== userDrawing) setUserDrawing(drawingToUse);
+
     setStep('result');
     try {
-      const result = await compareDrawings(referenceImage, userDrawing);
-      // Handle both string (error case) and object (success case)
-      if (typeof result === 'string') {
-        setAnalysis(result);
-        setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
-      } else {
-        setAnalysis(result.feedback);
-        setLineSets({
-          leftSet: result.leftSet || [],
-          rightSet: result.rightSet || [],
-          verticalSet: result.verticalSet || []
-        });
-      }
+      if (!referenceAnalysis) return;
+
+      // STEP 1: Scan Reference
+      setLoadingMessage("Step 1/3: Scanning Reference Model...");
+      // Use referenceImage (Solid) instead of referenceAnalysis (Wireframe) to ensure we only compare visible edges
+      const refResult = await scanImageStructure(referenceImage, "Reference Model");
+      setLineSets(prev => ({
+        ...prev,
+        refLeftSet: refResult.leftSet || [],
+        refRightSet: refResult.rightSet || [],
+        refVerticalSet: refResult.verticalSet || []
+      }));
+
+      // STEP 2: Scan User Drawing
+      setLoadingMessage("Step 2/3: Scanning Your Drawing...");
+      const userResult = await scanImageStructure(drawingToUse, "User Drawing");
+      setLineSets(prev => ({
+        ...prev,
+        leftSet: userResult.leftSet || [],
+        rightSet: userResult.rightSet || [],
+        verticalSet: userResult.verticalSet || []
+      }));
+
+      // STEP 3: Compare
+      setLoadingMessage("Step 3/3: Comparing Geometry...");
+      const finalResult = await compareLineSets(refResult, userResult, `Perspective Mode: ${preset}`);
+
+      console.log("AI Analysis Result:", finalResult); // DEBUG Log
+
+      setAnalysis(finalResult.feedback);
+      setGrade(finalResult.grade);
+
+      // Ensure local state matches final result if needed, but we populated it progressively above.
+
     } catch (error) {
       setAnalysis("Error analyzing images. Please try again.");
-      setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
+      setLineSets({ leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] });
+      setGrade(null);
     } finally {
       setIsAnalyzing(false);
     }
@@ -783,9 +1110,11 @@ const CritiqueZone: React.FC = () => {
     setStep('pose');
     setReferenceImage(null);
     setReferenceLines(null);
+    setReferenceAnalysis(null);
     setUserDrawing(null);
     setAnalysis(null);
-    setLineSets({ leftSet: [], rightSet: [], verticalSet: [] });
+    setGrade(null);
+    setLineSets({ leftSet: [], rightSet: [], verticalSet: [], refLeftSet: [], refRightSet: [], refVerticalSet: [] });
     setCaptureMeta({ vpLeft: null, vpRight: null, horizonY: null });
     setIsAnalyzing(false);
   };
@@ -825,13 +1154,13 @@ const CritiqueZone: React.FC = () => {
         <div className="flex-1 w-full relative">
           <Canvas gl={{ preserveDrawingBuffer: true }}>
             <Suspense fallback={null}>
-              <CameraController fov={fov} preset={preset} distance={cameraDistance} height={cameraHeight} />
+              <CameraController fov={fov} preset={preset} distance={15} height={cameraHeight} />
               <SceneContent
                 onCapture={handleCapture}
                 triggerCapture={triggerCapture}
                 showGuides={showGuides}
                 preset={preset}
-                cubePos={cubePos}
+                cubePos={[cubePos[0], cubePos[1], cubePos[2] - cubeDepth]}
                 cubeRotation={cubeRotation}
                 interactionMode={interactionMode}
                 onCubeMove={setCubePos}
@@ -877,13 +1206,15 @@ const CritiqueZone: React.FC = () => {
                     >
                       <Icons.Move />
                     </button>
-                    <button
-                      onClick={() => setInteractionMode('rotate')}
-                      className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'rotate' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`}
-                      title="Rotate Mode"
-                    >
-                      <Icons.RefreshCw />
-                    </button>
+                    {(preset === '2pt' || preset === '3pt') && (
+                      <button
+                        onClick={() => setInteractionMode('rotate')}
+                        className={`p-1.5 rounded border-2 transition-all ${interactionMode === 'rotate' ? 'bg-sketch-blue border-pencil shadow-sm' : 'border-transparent hover:border-pencil hover:bg-sketch-yellow'}`}
+                        title="Rotate Mode"
+                      >
+                        <Icons.RefreshCw />
+                      </button>
+                    )}
                   </div>
                 </>
               )}
@@ -895,13 +1226,13 @@ const CritiqueZone: React.FC = () => {
               )}
 
               <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
-                <span className="text-sm font-bold text-pencil font-hand">Dist</span>
+                <span className="text-sm font-bold text-pencil font-hand">Depth</span>
                 <input
                   type="range"
-                  min="5"
-                  max="50"
-                  value={cameraDistance}
-                  onChange={(e) => setCameraDistance(Number(e.target.value))}
+                  min="-10"
+                  max="10"
+                  value={cubeDepth}
+                  onChange={(e) => setCubeDepth(Number(e.target.value))}
                   className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
                 />
               </div>
@@ -1002,107 +1333,214 @@ const CritiqueZone: React.FC = () => {
               )}
             </div>
             <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
-            <button onClick={runComparison} disabled={!userDrawing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all">Check Accuracy</button>
+            <button onClick={() => runComparison()} disabled={!userDrawing} className="w-full bg-sketch-orange text-pencil py-4 rounded-xl font-bold text-2xl font-heading transform hover:-rotate-1 shadow-sketch hover:shadow-sketch-hover hover:-translate-y-1 border-2 border-pencil disabled:opacity-50 disabled:shadow-none transition-all">Check Accuracy</button>
           </div>
         </div>
       </div>
     );
   }
 
+  if (step === 'crop' && tempUploadedImage) {
+    console.log('Capture Meta for Crop:', captureMeta);
+    return (
+      <div className="h-full flex flex-col bg-paper p-4 md:p-6 overflow-hidden">
+        <div className="max-w-4xl mx-auto w-full h-full flex flex-col space-y-4">
+          <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed shrink-0">
+            <h2 className="text-3xl font-heading text-pencil transform -rotate-1">Crop Your Drawing</h2>
+            <button
+              onClick={() => {
+                setTempUploadedImage(null);
+                setStep('draw');
+              }}
+              className="text-sm font-bold font-hand text-pencil hover:text-sketch-red underline"
+            >
+              Cancel
+            </button>
+          </div>
+
+
+
+
+          <div className="flex-1 min-h-0 flex gap-4">
+            {/* Reference Image Column */}
+            <div className="w-1/3 bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil overflow-hidden flex flex-col">
+              <h3 className="font-hand font-bold text-center mb-2 text-pencil">Model Reference</h3>
+              <div className="flex-1 relative bg-gray-50 border border-pencil/20 rounded">
+                <img
+                  src={referenceImage!}
+                  alt="Model Reference"
+                  className="absolute inset-0 w-full h-full object-contain"
+                />
+              </div>
+              <p className="text-xs text-center mt-2 text-pencil/60 font-hand">Match this shape</p>
+            </div>
+
+            {/* Cropper Column */}
+            <div className="flex-1 bg-white p-2 rounded-sm shadow-sketch border-2 border-pencil relative">
+              <ImageCropper
+                imageSrc={tempUploadedImage}
+                targetAspectRatio={(captureMeta.width && captureMeta.height) ? (captureMeta.width / captureMeta.height) : 1}
+                targetWidth={captureMeta.width}
+                targetHeight={captureMeta.height}
+                onConfirm={handleCropConfirm}
+                onCancel={() => {
+                  setTempUploadedImage(null);
+                  setStep('draw');
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="h-full bg-paper p-4 md:p-6 overflow-y-auto">
-      <div className="max-w-md mx-auto w-full space-y-6">
+      <div className="max-w-4xl mx-auto w-full space-y-6">
         <div className="flex justify-between items-center border-b-2 border-pencil pb-4 border-dashed">
           <h2 className="text-3xl font-heading text-pencil">Accuracy Report</h2>
           <button onClick={resetFlow} className="text-sketch-blue font-bold font-hand text-lg hover:underline">New Practice</button>
         </div>
         <div className="grid grid-cols-2 gap-4">
-          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform -rotate-1">
+          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch">
             <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">Model</p>
-            <img src={referenceImage!} className="w-full h-24 object-contain" alt="ref" />
-          </div>
-          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch transform rotate-1 relative group">
-            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">You & True Perspective</p>
             <div className="relative w-full" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
-              <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
-
-              {/* Reference Wireframe Overlay */}
-              <img
-                src={referenceLines!}
-                className="absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-200"
-                style={{ opacity: overlayOpacity }}
-                alt="reference overlay"
-              />
-
-              {/* Perspective Lines Overlay */}
-              {captureMeta.width && captureMeta.height && (
-                <svg
-                  viewBox={`0 0 ${captureMeta.width} ${captureMeta.height}`}
-                  className="absolute inset-0 w-full h-full pointer-events-none overflow-visible"
-                >
-                  {captureMeta.horizonY !== null && (
+              <img src={referenceImage!} className="w-full h-full object-contain" alt="ref" />
+              {isAnalyzing && (
+                <LaserScanOverlay />
+              )}
+              {/* AI Reference Vision Layer (Detected Model Lines) */}
+              {showRefVision && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+                  {/* Left Set (Purple) */}
+                  {lineSets.refLeftSet && lineSets.refLeftSet.map((line, i) => (
                     <line
-                      x1="-10000" y1={captureMeta.horizonY}
-                      x2="10000" y2={captureMeta.horizonY}
-                      stroke="red" strokeWidth="2" strokeDasharray="10 10" opacity="0.3"
+                      key={`rl-${i}`}
+                      x1={line.start[0]} y1={line.start[1]}
+                      x2={line.end[0]} y2={line.end[1]}
+                      stroke="#A020F0" strokeWidth="4" opacity="0.8" strokeLinecap="round" strokeDasharray="8,4"
                     />
-                  )}
-
-                  {/* 1PT / 2PT Z-Edges (Orange) - Go to Center VP (1pt) or Right VP (2pt) */}
-                  {captureMeta.edgesZ && captureMeta.edgesZ.map((edge, i) => {
-                    let targetVP = null;
-                    if (preset === '1pt') targetVP = captureMeta.vpLeft; // The single VP
-                    else targetVP = captureMeta.vpRight; // The Z VP
-
-                    if (!targetVP) return null;
-
-                    const midX = (edge[0] + edge[2]) / 2;
-                    const midY = (edge[1] + edge[3]) / 2;
-
-                    return (
-                      <line
-                        key={`z-${i}`}
-                        x1={midX} y1={midY}
-                        x2={targetVP[0]} y2={targetVP[1]}
-                        stroke="orange" strokeWidth="1" opacity="0.2"
-                      />
-                    );
-                  })}
-
-                  {/* 2PT X-Edges (Cyan) - Go to Left VP */}
-                  {captureMeta.edgesX && captureMeta.edgesX.map((edge, i) => {
-                    const targetVP = captureMeta.vpLeft;
-                    if (preset !== '2pt' || !targetVP) return null;
-
-                    const midX = (edge[0] + edge[2]) / 2;
-                    const midY = (edge[1] + edge[3]) / 2;
-
-                    return (
-                      <line
-                        key={`x-${i}`}
-                        x1={midX} y1={midY}
-                        x2={targetVP[0]} y2={targetVP[1]}
-                        stroke="cyan" strokeWidth="1" opacity="0.2"
-                      />
-                    );
-                  })}
+                  ))}
+                  {/* Right Set (Gold) */}
+                  {lineSets.refRightSet && lineSets.refRightSet.map((line, i) => (
+                    <line
+                      key={`rr-${i}`}
+                      x1={line.start[0]} y1={line.start[1]}
+                      x2={line.end[0]} y2={line.end[1]}
+                      stroke="#FFD700" strokeWidth="4" opacity="0.8" strokeLinecap="round" strokeDasharray="8,4"
+                    />
+                  ))}
+                  {/* Vertical Set (Pink) */}
+                  {lineSets.refVerticalSet && lineSets.refVerticalSet.map((line, i) => (
+                    <line
+                      key={`rv-${i}`}
+                      x1={line.start[0]} y1={line.start[1]}
+                      x2={line.end[0]} y2={line.end[1]}
+                      stroke="#FF1493" strokeWidth="4" opacity="0.8" strokeLinecap="round" strokeDasharray="8,4"
+                    />
+                  ))}
                 </svg>
               )}
+            </div>
+            {/* Ref Vision Toggle - Centered Below Image */}
+            <div className="flex justify-center mt-2">
+              <div className="text-xs font-hand text-pencil bg-paper/50 backdrop-blur p-1 rounded-full border border-pencil/50 w-fit px-3 shadow-sm hover:bg-paper transition-all">
+                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-blue transition-colors select-none">
+                  <input
+                    type="checkbox"
+                    checked={showRefVision}
+                    onChange={(e) => setShowRefVision(e.target.checked)}
+                    className="accent-sketch-blue cursor-pointer w-3 h-3"
+                  />
+                  <span>AI Ref Vision</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div className="bg-white p-2 rounded-sm border-2 border-pencil shadow-sketch relative group">
 
-              {/* Opacity Control Hint */}
-              <div className="absolute bottom-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-black/50 text-white text-[10px] px-1 rounded pointer-events-none">
-                Ref Opacity: {Math.round(overlayOpacity * 100)}%
+            <div className="hidden">
+              <div className="flex justify-center text-xs font-hand text-pencil bg-paper/80 backdrop-blur p-1 rounded-full border border-pencil mx-auto w-fit px-4 shadow-sm">
+                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-orange transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={showAIVision}
+                    onChange={(e) => setShowAIVision(e.target.checked)}
+                    className="accent-sketch-orange cursor-pointer"
+                  />
+                  <span>AI Vision (Detected)</span>
+                </label>
+
+              </div>
+              <div className="flex justify-center text-xs font-hand text-pencil bg-paper/80 backdrop-blur p-1 rounded-full border border-pencil mx-auto w-fit px-4 shadow-sm">
+                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-blue transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={showRefVision}
+                    onChange={(e) => setShowRefVision(e.target.checked)}
+                    className="accent-sketch-blue cursor-pointer"
+                  />
+                  <span>AI Ref (Model)</span>
+                </label>
               </div>
             </div>
 
-            {/* Range Input for Opacity */}
-            <input
-              type="range"
-              min="0" max="1" step="0.1"
-              value={overlayOpacity}
-              onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
-              className="absolute -bottom-6 left-0 right-0 w-full h-1 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-            />
+            <p className="text-xs font-bold font-hand text-pencil mb-1 uppercase tracking-wide text-center">Your Drawing</p>
+            <div className="relative w-full" style={{ aspectRatio: (captureMeta.width && captureMeta.height) ? `${captureMeta.width}/${captureMeta.height}` : 'auto' }}>
+              <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
+
+              {/* Scanning Effect while analyzing */}
+              {isAnalyzing && <LaserScanOverlay />}
+
+              {/* AI Vision Layer (Detected Lines) */}
+              {showAIVision && (
+                <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1000 1000" preserveAspectRatio="none">
+                  {/* Left Set (Cyan) */}
+                  {lineSets.leftSet && lineSets.leftSet.map((line, i) => (
+                    <line
+                      key={`l-${i}`}
+                      x1={line.start[0]} y1={line.start[1]}
+                      x2={line.end[0]} y2={line.end[1]}
+                      stroke="cyan" strokeWidth="4" opacity="0.8" strokeLinecap="round"
+                    />
+                  ))}
+                  {/* Right Set (Orange) */}
+                  {lineSets.rightSet && lineSets.rightSet.map((line, i) => (
+                    <line
+                      key={`r-${i}`}
+                      x1={line.start[0]} y1={line.start[1]}
+                      x2={line.end[0]} y2={line.end[1]}
+                      stroke="orange" strokeWidth="4" opacity="0.8" strokeLinecap="round"
+                    />
+                  ))}
+                  {/* Vertical Set (Green) */}
+                  {lineSets.verticalSet && lineSets.verticalSet.map((line, i) => (
+                    <line
+                      key={`v-${i}`}
+                      x1={line.start[0]} y1={line.start[1]}
+                      x2={line.end[0]} y2={line.end[1]}
+                      stroke="#32CD32" strokeWidth="4" opacity="0.8" strokeLinecap="round"
+                    />
+                  ))}
+                </svg>
+              )}
+
+
+            </div>
+            {/* AI Vision Toggle - Centered Below Image */}
+            <div className="flex justify-center mt-2">
+              <div className="text-xs font-hand text-pencil bg-paper/50 backdrop-blur p-1 rounded-full border border-pencil/50 w-fit px-3 shadow-sm hover:bg-paper transition-all">
+                <label className="flex items-center gap-1 cursor-pointer hover:text-sketch-orange transition-colors select-none">
+                  <input
+                    type="checkbox"
+                    checked={showAIVision}
+                    onChange={(e) => setShowAIVision(e.target.checked)}
+                    className="accent-sketch-orange cursor-pointer w-3 h-3"
+                  />
+                  <span>AI Vision</span>
+                </label>
+              </div>
+            </div>
           </div>
         </div>
         <div className="bg-paper rounded-sm shadow-sketch border-2 border-pencil p-6 min-h-[300px] relative">
@@ -1113,15 +1551,52 @@ const CritiqueZone: React.FC = () => {
             {isAnalyzing ? (
               <div className="flex flex-col items-center justify-center h-48 gap-4 text-pencil">
                 <div className="animate-spin text-sketch-orange"><Icons.Loader /></div>
-                <p className="font-hand text-xl animate-pulse">Analyzing lines & angles...</p>
+                <p className="font-hand text-xl animate-pulse text-center">
+                  {loadingMessage}
+                </p>
               </div>
             ) : (
-              <MarkdownRenderer content={analysis || "No analysis available."} className="font-hand text-lg" />
+              <div className="flex flex-col gap-4">
+                {grade && (
+                  <div className="flex justify-center">
+                    <div className={`
+                      w-16 h-16 rounded-full flex items-center justify-center border-4 border-pencil shadow-sketch transform -rotate-3
+                      ${grade === 'A' ? 'bg-green-400 text-white' : ''}
+                      ${grade === 'B' ? 'bg-blue-400 text-white' : ''}
+                      ${grade === 'C' ? 'bg-yellow-400 text-white' : ''}
+                      ${grade === 'D' ? 'bg-orange-400 text-white' : ''}
+                      ${grade === 'F' ? 'bg-red-500 text-white' : ''}
+                    `}>
+                      <span className="font-heading text-4xl">{grade}</span>
+                    </div>
+                  </div>
+                )}
+                <MarkdownRenderer content={analysis || "No analysis available."} className="font-hand text-lg" />
+
+                {/* Technical Details Section */}
+                <details className="mt-4 border-t-2 border-pencil/20 pt-2">
+                  <summary className="cursor-pointer font-bold font-hand text-pencil/60 hover:text-pencil flex items-center gap-2">
+                    <Icons.Info size={16} /> Technical Analysis Data
+                  </summary>
+                  <div className="mt-2 text-xs font-mono bg-black/5 p-2 rounded text-pencil/80 overflow-x-auto">
+                    <p><strong>Mode:</strong> {preset}</p>
+                    <p><strong>Camera:</strong> Depth: {cubeDepth}, Lens: {fov}</p>
+                    <div className="my-1 border-b border-pencil/10"></div>
+                    <p><strong>Ground Truth Geometry:</strong></p>
+                    <ul className="list-disc pl-4">
+                      <li>X-Edges (Horizontal/Left): {captureMeta.edgesX?.length || 0}</li>
+                      <li>Z-Edges (Depth/Right): {captureMeta.edgesZ?.length || 0}</li>
+                      <li>VP Left: {captureMeta.vpLeft ? `[${Math.round(captureMeta.vpLeft[0])}, ${Math.round(captureMeta.vpLeft[1])}]` : 'N/A'}</li>
+                      <li>VP Right: {captureMeta.vpRight ? `[${Math.round(captureMeta.vpRight[0])}, ${Math.round(captureMeta.vpRight[1])}]` : 'N/A'}</li>
+                    </ul>
+                  </div>
+                </details>
+              </div>
             )}
           </div>
         </div>
       </div>
-    </div>
+    </div >
   );
 };
 

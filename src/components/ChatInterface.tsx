@@ -45,11 +45,13 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ initialMessage }) => {
     setIsLoading(true);
 
     try {
-      // Prepare history for API
-      const history = messages.map(m => ({
-        role: m.role,
-        parts: [{ text: m.content }]
-      }));
+      // Prepare history for API - exclude welcome message (Gemini requires first message to be 'user')
+      const history = messages
+        .filter(m => m.id !== 'welcome')
+        .map(m => ({
+          role: m.role,
+          parts: [{ text: m.content }]
+        }));
 
       const responseText = await sendMessageToGemini(history, userMsg.content);
 

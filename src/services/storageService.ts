@@ -339,3 +339,25 @@ export const DIFFICULTY_CONFIG = {
     feedbackDetail: 'concise',
   },
 } as const;
+
+// Onboarding functions
+const ONBOARDING_KEY = 'art-tutor-onboarded';
+
+export function isOnboardingCompleted(): boolean {
+  try {
+    if (localStorage.getItem(ONBOARDING_KEY) === 'true') return true;
+    // Existing users (before this feature) skip onboarding
+    if (localStorage.getItem(STORAGE_KEY)) return true;
+  } catch (e) {
+    console.error('Failed to check onboarding status:', e);
+  }
+  return false;
+}
+
+export function setOnboardingCompleted(): void {
+  try {
+    localStorage.setItem(ONBOARDING_KEY, 'true');
+  } catch (e) {
+    console.error('Failed to set onboarding status:', e);
+  }
+}

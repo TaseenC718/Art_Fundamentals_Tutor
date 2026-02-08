@@ -41,10 +41,15 @@ export const sendMessageToGemini = async (
       systemInstruction: "You are an expert Art Tutor specializing exclusively in Linear Perspective and Geometric Forms. Your goal is to help users master drawing cubes in 1-point, 2-point, and 3-point perspective. Be precise about vanishing points, horizon lines, and convergence. Use markdown for clarity."
     });
 
-    const chatHistory: Content[] = history.map(msg => ({
+    let chatHistory: Content[] = history.map(msg => ({
       role: msg.role === 'model' ? 'model' : 'user',
       parts: msg.parts.map(p => ({ text: p.text } as Part))
     }));
+
+    // Gemini requires first message to be 'user' - remove any leading 'model' messages
+    while (chatHistory.length > 0 && chatHistory[0].role === 'model') {
+      chatHistory = chatHistory.slice(1);
+    }
 
     const chat = model.startChat({
       history: chatHistory,

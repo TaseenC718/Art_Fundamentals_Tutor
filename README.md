@@ -1,239 +1,92 @@
-# Art Coach
+# Art Fundamentals Tutor 🎨
 
-A turn-based visual drawing coach that teaches one-point perspective cube construction using AI-powered image analysis.
+**Master perspective drawing with interactive 3D tools and AI-powered feedback.**
 
-## How It Works
+Art Fundamentals Tutor is a web application designed to help artists understand and practice the core concepts of perspective. It combines a real-time 3D reference workspace with Gemini AI analysis to bridge the gap between theory and practice.
 
-Art Coach is a **turn-based visual tutor** — think chess, not video chat. The user draws, captures an image, and receives AI feedback with visual overlays showing what to fix and what to draw next.
+![App Screenshot](./public/screenshot.png) *<!-- Add a screenshot here later if available -->*
 
-### Core Loop
+## ✨ Key Features
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  User Draws │ ──▶ │   Capture   │ ──▶ │  AI Analyzes│ ──▶ │   Overlay   │
-│             │     │   Image     │     │   Drawing   │     │   Feedback  │
-└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
-       ▲                                                           │
-       └───────────────────────────────────────────────────────────┘
-                              User redraws
-```
+### 🧊 Interactive 3D Workspace
+*   **Real-time Reference**: Manipulate a 3D cube in real-time to see how perspective changes with rotation and camera angle.
+*   **Perspective Modes**: Switch instantly between **1-Point**, **2-Point**, and **3-Point** perspective presets.
+*   **Free Look**: Break the rules and explore freely with a fully unlocked camera.
+*   **Visual Guides**: Toggle horizon lines, vanishing points, and perspective grids to visualize the underlying geometry.
 
-### Architecture
+### 🤖 AI Critique Zone
+*   **Gemini Vision Integration**: Upload or take a photo of your drawing, and let Google's Gemini AI analyze your accuracy.
+*   **Smart Feedback**: Get instant grading (A-F), specific constructive criticism, and actionable tips on how to improve.
+*   **Wireframe Overlay**: Compare your drawing directly against the "ground truth" 3D wireframe to spot errors instantly.
 
-```
-src/
-├── components/
-│   ├── DrawingCoach.tsx    # Main orchestrator - wires state, canvas, and AI
-│   ├── ImageCapture.tsx    # Camera capture + file upload
-│   ├── CanvasOverlay.tsx   # Layered canvas rendering system
-│   ├── StepIndicator.tsx   # Progress bar (3 steps)
-│   └── InstructionPanel.tsx # Feedback display + action buttons
-├── hooks/
-│   ├── useDrawingState.ts  # State machine (useReducer)
-│   ├── useGeminiAnalysis.ts # TanStack Query mutation
-│   ├── useCamera.ts        # MediaDevices API wrapper
-│   └── useLineAnimation.ts # requestAnimationFrame animations
-├── services/
-│   └── gemini.ts           # Gemini Vision client + prompts + response parsing
-├── types/
-│   └── index.ts            # TypeScript definitions
-└── utils/
-    └── canvas.ts           # Drawing helpers + coordinate conversion
-```
+### 📈 Gamified Progress
+*   **Level Up**: Earn XP for every practice session, critique, and lesson completed.
+*   **Daily Goals**: Tackle dynamic daily challenges to keep your skills sharp.
+*   **Streaks**: Build a habit with daily practice streaks.
+*   **Art Gallery**: Your critique history is saved automatically. Review your past work and track your improvement over time.
 
-### Key Design Decisions
+### 👤 Personalization
+*   **Profile**: customize your display name and avatar.
+*   **Difficulty Settings**: Adjust the strictness of the AI grading (Beginner, Intermediate, Advanced) to match your skill level.
 
-#### 1. State Machine with `useReducer`
-All state transitions are explicit and typed. The app progresses through states:
-```
-idle → capturing → analyzing → showing_feedback → animating_guide → awaiting_redraw → [next step or completed]
-```
+## 🛠️ Tech Stack
 
-#### 2. Normalized Coordinates (0-1)
-Gemini returns coordinates normalized to 0-1. This decouples AI output from canvas dimensions:
-```typescript
-// Gemini returns: { x: 0.5, y: 0.3 }
-// Canvas converts: { x: 400, y: 180 } (for 800x600 canvas)
-```
+*   **Frontend**: React 18 with TypeScript
+*   **Build Tool**: Vite
+*   **3D Rendering**: Three.js / @react-three/fiber / @react-three/drei
+*   **Styling**: Tailwind CSS
+*   **AI**: Google Gemini Pro Vision API
+*   **Icons**: Lucide React
 
-#### 3. Layered Canvas Rendering
-Single `<canvas>` element with multiple render passes:
-- Layer 0: Base image (user's drawing)
-- Layer 1: Error highlights (red/orange boxes)
-- Layer 2: Suggested guide lines (green, animated)
-
-#### 4. EXIF-Safe Image Processing
-Phone photos have EXIF rotation metadata. We draw to canvas before extracting base64, which applies the rotation so Gemini sees the correct orientation.
-
----
-
-## Setup
+## 🚀 Getting Started
 
 ### Prerequisites
-- Node.js 18+
-- A Google AI Studio API key
 
-### 1. Clone and Install
+*   Node.js (v18 or higher)
+*   npm or yarn
+*   A Google Gemini API Key
 
-```bash
-cd drawing-app
-npm install
-```
+### Installation
 
-### 2. Configure Environment
+1.  **Clone the repository**
+    ```bash
+    git clone https://github.com/TaseenC718/Art_Fundamentals_Tutor.git
+    cd Art_Fundamentals_Tutor
+    ```
 
-Create a `.env` file from the sample:
+2.  **Install dependencies**
+    ```bash
+    npm install
+    ```
 
-```bash
-cp .env.sample .env
-```
+3.  **Configure Environment**
+    Create a `.env` file in the root directory and add your Gemini API key:
+    ```env
+    VITE_GEMINI_API_KEY=your_api_key_here
+    ```
 
-Edit `.env` and add your Gemini API key:
+4.  **Run the Development Server**
+    ```bash
+    npm run dev
+    ```
 
-```
-VITE_GEMINI_API_KEY=your_api_key_here
-```
+5.  **Open in Browser**
+    Navigate to `http://localhost:5173` to start practicing!
 
-#### Getting a Gemini API Key
+## 🤝 Contributing
 
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-2. Sign in with your Google account
-3. Click **"Create API Key"**
-4. Copy the key and paste it into your `.env` file
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-> **Note:** The free tier has generous limits for hackathon/development use.
+1.  Fork the project
+2.  Create your feature branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the branch (`git push origin feature/AmazingFeature`)
+5.  Open a Pull Request
 
-### 3. Run Development Server
+## 📄 License
 
-```bash
-npm run dev
-```
-
-Open [http://localhost:5173](http://localhost:5173) in your browser.
-
-### 4. Build for Production
-
-```bash
-npm run build
-npm run preview
-```
+Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
-## Usage
-
-1. **Start** — You'll see the capture screen
-2. **Draw** — Draw a cube on paper (or use a drawing app)
-3. **Capture** — Use camera or upload an image
-4. **Review** — See AI feedback with score, errors, and suggestions
-5. **Show Guide Lines** — Optional animated overlay showing what to draw
-6. **Retry or Next Step** — Fix issues or proceed to the next construction step
-
-### The 3 Steps
-
-| Step | Goal | What AI Checks |
-|------|------|----------------|
-| 1. Front Face | Draw a square | Four lines, ~90° corners, equal sides |
-| 2. Depth Lines | Lines toward vanishing point | Convergence, direction (upper-right) |
-| 3. Back Face | Complete the cube | Parallel to front, proper perspective |
-
----
-
-## How the AI Works
-
-### Prompt Strategy
-
-Gemini is framed as a **geometry analyzer**, not an art critic. The prompt:
-- Specifies one-point perspective rules
-- Requests normalized (0-1) coordinates
-- Enforces JSON-only output
-- Limits errors to top 3 issues
-
-### Response Schema
-
-```json
-{
-  "success": true,
-  "overallScore": 78,
-  "errors": [
-    {
-      "type": "line_angle",
-      "severity": "minor",
-      "description": "Front face slightly tilted",
-      "location": { "x": 0.2, "y": 0.3, "width": 0.3, "height": 0.3 }
-    }
-  ],
-  "suggestedCorrections": [
-    {
-      "type": "draw_line",
-      "description": "Draw vertical edge here",
-      "line": {
-        "start": { "x": 0.6, "y": 0.2 },
-        "end": { "x": 0.6, "y": 0.5 }
-      }
-    }
-  ],
-  "feedback": "Good start! Your front face is well-proportioned.",
-  "readyForNextStep": true
-}
-```
-
-### Error Handling
-
-- **Bad JSON** → Zod validation catches it, shows fallback message
-- **Rate limiting** → TanStack Query retries (2 attempts)
-- **Off-screen coordinates** → Clamped to valid range
-
----
-
-## Future Improvements
-
-### Short-term (Hackathon Polish)
-
-- [ ] **Better visual feedback** — Pulsing animations on error regions
-- [ ] **Voice instructions** — Text-to-speech for hands-free guidance
-- [ ] **Undo/history** — Let users go back to previous captures
-- [ ] **Mobile optimization** — Responsive layout, touch-friendly buttons
-
-### Medium-term (Feature Expansion)
-
-- [ ] **More shapes** — Cylinders, spheres, two-point perspective
-- [ ] **Difficulty levels** — Beginner (guided) vs Advanced (less hand-holding)
-- [ ] **Progress tracking** — Save session history, show improvement over time
-- [ ] **Custom exercises** — Let users define their own construction steps
-- [ ] **Drawing on canvas** — Draw directly in-app instead of uploading photos
-
-### Long-term (Product Vision)
-
-- [ ] **Real-time feedback** — Gemini Live integration for streaming analysis
-- [ ] **AR overlay** — Use device camera to overlay guides on physical paper
-- [ ] **Curriculum system** — Structured lessons: perspective → shading → composition
-- [ ] **Community features** — Share drawings, get peer feedback
-- [ ] **Instructor mode** — Teachers create custom exercises for students
-
-### Technical Debt
-
-- [ ] **Add tests** — Unit tests for state machine, integration tests for Gemini parsing
-- [ ] **Error boundaries** — Graceful recovery from component crashes
-- [ ] **Accessibility** — Screen reader support, keyboard navigation
-- [ ] **Performance** — Lazy load components, optimize canvas rendering
-- [ ] **Offline support** — Service worker for PWA capabilities
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|------------|
-| Framework | React 18 + TypeScript |
-| Build | Vite 6 |
-| State | useReducer + TanStack Query |
-| AI | Google Gemini Vision (@google/genai) |
-| Validation | Zod |
-| Styling | Plain CSS (CSS variables) |
-
----
-
-## License
-
-MIT
+*Built with ❤️ for artists everywhere.*

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { getProgress, getDailyTasks, toggleTask, getLevelTitle, DailyTask, UserProgress } from '../services/storageService';
+import { Pencil } from 'lucide-react';
+import { getProgress, getDailyTasks, completeTask, getLevelTitle, DailyTask, UserProgress } from '../services/storageService';
+import Settings from './Settings';
 
 const Mascot = () => (
   <svg viewBox="0 0 200 200" className="w-32 h-32 mx-auto filter drop-shadow-[4px_4px_0px_rgba(45,45,45,1)]">
@@ -19,22 +21,35 @@ const Home: React.FC = () => {
   const [tasks, setTasks] = useState<DailyTask[]>([]);
   const [progress, setProgress] = useState<UserProgress | null>(null);
   const [xpAnimation, setXpAnimation] = useState<number | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [completingTaskId, setCompletingTaskId] = useState<number | null>(null);
 
   useEffect(() => {
     setTasks(getDailyTasks());
     setProgress(getProgress());
   }, []);
 
-  const handleToggleTask = (id: number) => {
-    const result = toggleTask(id);
-    setTasks(result.tasks);
-    setProgress(getProgress());
+  const handleCompleteTask = (id: number) => {
+    // 1. Show checkmark animation
+    setCompletingTaskId(id);
 
-    // Show XP animation
-    if (result.xpGained !== 0) {
-      setXpAnimation(result.xpGained);
-      setTimeout(() => setXpAnimation(null), 1500);
-    }
+    // 2. Wait for animation, then replace task
+    setTimeout(() => {
+      const result = completeTask(id);
+      setTasks(result.tasks);
+      setProgress(getProgress());
+      setCompletingTaskId(null);
+
+      // Show XP animation
+      if (result.xpGained !== 0) {
+        setXpAnimation(result.xpGained);
+        setTimeout(() => setXpAnimation(null), 1500);
+      }
+    }, 600);
+  };
+
+  const handleProfileUpdate = () => {
+    setProgress(getProgress());
   };
 
   if (!progress) return null;
@@ -45,9 +60,22 @@ const Home: React.FC = () => {
     <div className="h-full overflow-y-auto bg-paper pb-24 font-hand">
       <div className="bg-paper p-6 pb-8 border-b-2 border-pencil border-dashed relative">
         <h1 className="text-4xl font-heading text-pencil text-center mb-6 transform -rotate-1">My Profile</h1>
-        <div className="bg-paper rounded-full w-40 h-40 mx-auto flex items-center justify-center mb-4 border-2 border-pencil shadow-sketch">
-          <Mascot />
+        <div className="relative w-40 h-40 mx-auto mb-4 group">
+          <div className="bg-paper rounded-full w-full h-full flex items-center justify-center border-2 border-pencil shadow-sketch overflow-hidden">
+            {progress.avatar && progress.avatar !== 'default' ? (
+              <img src={progress.avatar} alt="Profile" className="w-full h-full object-cover" />
+            ) : (
+              <Mascot />
+            )}
+          </div>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="absolute bottom-0 right-0 bg-sketch-blue text-pencil p-2 rounded-full border-2 border-pencil shadow-sm hover:scale-110 transition-transform"
+          >
+            <Pencil size={16} />
+          </button>
         </div>
+        <h2 className="text-center text-2xl font-hand font-bold text-pencil mb-1">{progress.displayName || 'Artist'}</h2>
         <p className="text-center text-sketch-orange font-bold text-xl uppercase tracking-widest">
           Level {progress.level}: {levelTitle}
         </p>
@@ -66,15 +94,17 @@ const Home: React.FC = () => {
             {tasks.map(task => (
               <button
                 key={task.id}
-                onClick={() => handleToggleTask(task.id)}
-                className={`w-full text-left p-3 rounded-sm border-2 transition-all duration-200 flex items-center gap-3 ${task.completed
-                    ? 'bg-paper border-pencil/30 text-pencil/50'
-                    : 'bg-white border-pencil text-pencil hover:bg-sketch-yellow/20 hover:shadow-sm'
+                onClick={() => handleCompleteTask(task.id)}
+                disabled={completingTaskId === task.id || task.completed}
+                className={`w-full text-left p-3 rounded-sm border-2 transition-all duration-300 flex items-center gap-3 ${completingTaskId === task.id ? 'scale-95 opacity-50 bg-green-50 border-green-500' :
+                    task.completed
+                      ? 'bg-paper border-pencil/30 text-pencil/50'
+                      : 'bg-white border-pencil text-pencil hover:bg-sketch-yellow/20 hover:shadow-sm'
                   }`}
               >
                 <div className={`w-6 h-6 rounded-sm border-2 flex items-center justify-center ${task.completed ? 'bg-sketch-blue border-pencil' : 'border-pencil'
                   }`}>
-                  {task.completed && <div className="text-pencil font-bold text-sm">✓</div>}
+                  {completingTaskId === task.id && <div className="text-pencil font-bold text-sm animate-bounce">✓</div>}
                 </div>
                 <span className={`text-lg ${task.completed ? 'line-through decoration-2 decoration-sketch-red' : ''}`}>{task.text}</span>
               </button>
@@ -96,6 +126,13 @@ const Home: React.FC = () => {
           )}
         </div>
       </div>
+      <Settings
+        isOpen={showSettings}
+        onClose={() => {
+          setShowSettings(false);
+          handleProfileUpdate();
+        }}
+      />
     </div>
   );
 };

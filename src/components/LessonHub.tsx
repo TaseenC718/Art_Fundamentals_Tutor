@@ -9,7 +9,7 @@ const LESSON_TOPICS = [
   { id: '3point', title: '3-Point Perspective', desc: 'Extreme heights or depths. Three vanishing points.', color: 'bg-sketch-orange/20 text-sketch-orange' },
   { id: 'horizon', title: 'Horizon & Eye Level', desc: 'Understanding how camera height affects the cube\'s visibility.', color: 'bg-pencil/10 text-pencil' },
   { id: 'rotation', title: 'Rotating Cubes', desc: 'How vanishing points move when a cube rotates.', color: 'bg-sketch-yellow/50 text-pencil' },
-  { id: 'shadows', title: 'Cast Shadows', desc: 'Plotting shadows of a cube onto the ground plane.', color: 'bg-sketch-blue/10 text-sketch-blue' },
+
 ];
 
 const LessonHub: React.FC = () => {
@@ -74,12 +74,12 @@ const LessonHub: React.FC = () => {
           <p className="text-pencil text-lg">Master the geometry of the cube with these focused lessons.</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="flex flex-wrap justify-center gap-6">
           {LESSON_TOPICS.map((topic, index) => (
             <button
               key={topic.id}
               onClick={() => handleLessonSelect(topic.id, topic.title)}
-              className={`group text-left bg-white p-6 rounded-sm shadow-sketch border-2 border-pencil hover:shadow-sketch-hover hover:-translate-y-1 transition-all duration-200 flex flex-col gap-4 relative ${index % 2 === 0 ? 'rotate-1' : '-rotate-1'}`}
+              className={`group text-left bg-white p-6 rounded-sm shadow-sketch border-2 border-pencil hover:shadow-sketch-hover hover:-translate-y-1 transition-all duration-200 flex flex-col gap-4 relative w-full md:w-[calc(50%-1.5rem)] lg:w-[calc(33.333%-1.5rem)] max-w-sm ${index % 2 === 0 ? 'rotate-1' : '-rotate-1'}`}
             >
               <div className={`w-12 h-12 rounded-full border-2 border-pencil flex items-center justify-center ${topic.color}`}>
                 <Icons.BookOpen />

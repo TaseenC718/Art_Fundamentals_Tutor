@@ -259,17 +259,30 @@ const Camera: React.FC<CameraProps> = ({ onSelectPhoto, selectMode = false }) =>
                 </h4>
                 <div className="grid grid-cols-3 gap-2">
                   {group.photos.map((photo) => (
-                    <button
-                      key={photo.id}
-                      onClick={() => handleSelectFromArchive(photo)}
-                      className="aspect-square rounded-lg overflow-hidden border-2 border-pencil shadow-sketch hover:shadow-sketch-hover hover:-translate-y-0.5 transition-all bg-white"
-                    >
-                      <img
-                        src={photo.imageData}
-                        alt="Archived drawing"
-                        className="w-full h-full object-cover"
-                      />
-                    </button>
+                    <div key={photo.id} className="relative group">
+                      <button
+                        onClick={() => handleSelectFromArchive(photo)}
+                        className="w-full aspect-square rounded-lg overflow-hidden border-2 border-pencil shadow-sketch hover:shadow-sketch-hover hover:-translate-y-0.5 transition-all bg-white"
+                      >
+                        <img
+                          src={photo.imageData}
+                          alt="Archived drawing"
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (window.confirm('Delete this photo?')) {
+                            handleDeletePhoto(photo);
+                          }
+                        }}
+                        className="absolute -top-2 -right-2 w-6 h-6 bg-sketch-red text-white rounded-full border-2 border-white shadow-md flex items-center justify-center hover:scale-110 transition-transform z-10"
+                        title="Delete photo"
+                      >
+                        <X size={14} strokeWidth={3} />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>

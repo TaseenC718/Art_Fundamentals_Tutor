@@ -176,3 +176,16 @@ export async function getPhotoCount(): Promise<number> {
     request.onerror = () => reject(new Error('Failed to count photos'));
   });
 }
+
+export async function clearAllPhotos(): Promise<void> {
+  const db = await getDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    const request = store.clear();
+
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(new Error('Failed to clear all photos'));
+  });
+}

@@ -9,6 +9,15 @@ export interface DailyTask {
   completed: boolean;
 }
 
+export interface CritiqueRecord {
+  id: string; // timestamp
+  date: string;
+  thumbnail: string; // base64 user drawing
+  grade: string;
+  feedback: string;
+  difficulty: Difficulty;
+}
+
 export interface UserProgress {
   xp: number;
   level: number;
@@ -18,6 +27,10 @@ export interface UserProgress {
   totalLessons: number;
   completedTaskIds: number[];
   weeklyActivity: number[]; // Last 7 days of practice minutes/sessions
+  displayName: string;
+  avatar: string; // 'default' or base64
+  activeTaskIds: number[];
+  critiqueHistory: CritiqueRecord[];
 }
 
 export interface UserSettings {
@@ -33,17 +46,35 @@ const DEFAULT_PROGRESS: UserProgress = {
   totalLessons: 0,
   completedTaskIds: [],
   weeklyActivity: [0, 0, 0, 0, 0, 0, 0],
+  displayName: 'Artist',
+  avatar: 'default',
+  activeTaskIds: [1, 2, 3],
+  critiqueHistory: [],
 };
 
 const DEFAULT_SETTINGS: UserSettings = {
   difficulty: 'intermediate',
 };
 
-const DAILY_TASKS: DailyTask[] = [
+// Extended Task Pool - Strictly Perspective Focused
+const TASK_POOL: DailyTask[] = [
   { id: 1, text: "Draw 3 cubes in 1-Point Perspective", completed: false },
-  { id: 2, text: "Draw a 'Transparent' Cube", completed: false },
-  { id: 3, text: "Sketch a floating cube", completed: false },
+  { id: 2, text: "Draw a 'Transparent' Cube (show back lines)", completed: false },
+  { id: 3, text: "Sketch a floating cube above the horizon", completed: false },
+  { id: 4, text: "Draw a cube below the horizon (Bird's Eye)", completed: false },
+  { id: 5, text: "Stack 3 cubes vertically in 2-Point Perspective", completed: false },
+  { id: 6, text: "Draw a very wide, flat box", completed: false },
+  { id: 7, text: "Draw a very tall, thin pillar", completed: false },
+  { id: 8, text: "Draw 3 cubes rotating slightly each time", completed: false },
+  { id: 9, text: "Draw a cube with a 'slice' taken out", completed: false },
+  { id: 10, text: "Draw 2 overlapping cubes", completed: false },
+  { id: 11, text: "Draw a cube in 3-Point Perspective", completed: false },
+  { id: 12, text: "Fill the page with 5 random cubes", completed: false },
 ];
+
+export function getTask(id: number): DailyTask | undefined {
+  return TASK_POOL.find(t => t.id === id);
+}
 
 // XP rewards
 const XP_PER_TASK = 50;
@@ -55,7 +86,7 @@ export function getProgress(): UserProgress {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
-      return { ...DEFAULT_PROGRESS, ...JSON.parse(stored) };
+      return migrateProgress(JSON.parse(stored));
     }
   } catch (e) {
     console.error('Failed to load progress:', e);
@@ -71,53 +102,85 @@ export function saveProgress(progress: UserProgress): void {
   }
 }
 
-export function getDailyTasks(): DailyTask[] {
-  const progress = getProgress();
-  const today = new Date().toDateString();
-
-  // Reset tasks if it's a new day
-  if (progress.lastPracticeDate !== today) {
-    return DAILY_TASKS.map(t => ({ ...t, completed: false }));
-  }
-
-  return DAILY_TASKS.map(t => ({
-    ...t,
-    completed: progress.completedTaskIds.includes(t.id),
-  }));
+// Ensure activeTaskIds and critiqueHistory exist on load (migration)
+function migrateProgress(progress: any): UserProgress {
+  const defaults = { ...DEFAULT_PROGRESS };
+  return {
+    ...defaults,
+    ...progress,
+    activeTaskIds: progress.activeTaskIds || defaults.activeTaskIds,
+    critiqueHistory: progress.critiqueHistory || defaults.critiqueHistory,
+  };
 }
 
-export function toggleTask(taskId: number): { tasks: DailyTask[]; xpGained: number } {
+export function getDailyTasks(): DailyTask[] {
+  const progress = getProgress();
+
+  // Initialize activeTaskIds if missing (migration)
+  if (!progress.activeTaskIds || progress.activeTaskIds.length === 0) {
+    progress.activeTaskIds = [1, 2, 3];
+    saveProgress(progress);
+  }
+
+  return progress.activeTaskIds
+    .map(id => getTask(id))
+    .filter((t): t is DailyTask => !!t)
+    .map(t => ({
+      ...t,
+      completed: progress.completedTaskIds.includes(t.id)
+    }));
+}
+
+export function completeTask(taskId: number): { tasks: DailyTask[]; xpGained: number } {
   const progress = getProgress();
   const today = new Date().toDateString();
   let xpGained = 0;
 
   // Check if starting a new day
   if (progress.lastPracticeDate !== today) {
-    progress.completedTaskIds = [];
     progress.lastPracticeDate = today;
     updateStreak(progress);
   }
 
-  const wasCompleted = progress.completedTaskIds.includes(taskId);
-
-  if (wasCompleted) {
-    // Uncomplete - remove from list, deduct XP
-    progress.completedTaskIds = progress.completedTaskIds.filter(id => id !== taskId);
-    progress.xp = Math.max(0, progress.xp - XP_PER_TASK);
-    xpGained = -XP_PER_TASK;
-  } else {
-    // Complete - add to list, award XP
-    progress.completedTaskIds.push(taskId);
-    progress.xp += XP_PER_TASK;
-    xpGained = XP_PER_TASK;
-
-    // Update weekly activity
-    const dayIndex = new Date().getDay();
-    progress.weeklyActivity[dayIndex] = Math.min(100, progress.weeklyActivity[dayIndex] + 15);
+  // If already completed, ignore (UI shouldn't allow this, but for safety)
+  if (progress.completedTaskIds.includes(taskId)) {
+    return { tasks: getDailyTasks(), xpGained: 0 };
   }
+
+  // Complete task
+  progress.completedTaskIds.push(taskId);
+  progress.xp += XP_PER_TASK;
+  xpGained = XP_PER_TASK;
+
+  // Update weekly activity
+  const dayIndex = new Date().getDay();
+  progress.weeklyActivity[dayIndex] = Math.min(100, progress.weeklyActivity[dayIndex] + 15);
 
   // Recalculate level
   progress.level = Math.floor(progress.xp / XP_PER_LEVEL) + 1;
+
+  // REPLACE the completed task with a new one
+  // Filter out the completed task from active list
+  const activeWithoutCompleted = progress.activeTaskIds.filter(id => id !== taskId);
+
+  // Find a new task that isn't currently active AND hasn't been completed today
+  const availableTasks = TASK_POOL.filter(t =>
+    !activeWithoutCompleted.includes(t.id) && // Not currently shown
+    t.id !== taskId && // Not the one just finished
+    !progress.completedTaskIds.includes(t.id) // Not already completed today
+  );
+
+  // Pick random new task
+  if (availableTasks.length > 0) {
+    const randomTask = availableTasks[Math.floor(Math.random() * availableTasks.length)];
+    // Maintain order: replace the old ID with the new ID at the same index
+    const index = progress.activeTaskIds.indexOf(taskId);
+    if (index !== -1) {
+      progress.activeTaskIds[index] = randomTask.id;
+    } else {
+      progress.activeTaskIds.push(randomTask.id);
+    }
+  }
 
   saveProgress(progress);
 
@@ -125,6 +188,13 @@ export function toggleTask(taskId: number): { tasks: DailyTask[]; xpGained: numb
     tasks: getDailyTasks(),
     xpGained,
   };
+}
+
+export function updateProfile(displayName: string, avatar: string): void {
+  const progress = getProgress();
+  progress.displayName = displayName;
+  progress.avatar = avatar;
+  saveProgress(progress);
 }
 
 function updateStreak(progress: UserProgress): void {
@@ -141,7 +211,7 @@ function updateStreak(progress: UserProgress): void {
   }
 }
 
-export function recordCritique(): { xpGained: number; totalCritiques: number } {
+export function recordCritique(critiqueData?: Omit<CritiqueRecord, 'id' | 'date'>): { xpGained: number; totalCritiques: number } {
   const progress = getProgress();
   const today = new Date().toDateString();
 
@@ -149,6 +219,18 @@ export function recordCritique(): { xpGained: number; totalCritiques: number } {
   if (progress.lastPracticeDate !== today) {
     updateStreak(progress);
     progress.lastPracticeDate = today;
+  }
+
+  // Save critique record if provided
+  if (critiqueData) {
+    const newRecord: CritiqueRecord = {
+      ...critiqueData,
+      id: Date.now().toString(),
+      date: new Date().toLocaleDateString(),
+    };
+
+    // Add to history (newest first)
+    progress.critiqueHistory = [newRecord, ...progress.critiqueHistory].slice(0, 50); // Keep last 50
   }
 
   progress.totalCritiques += 1;
@@ -191,6 +273,14 @@ export function getLevelTitle(level: number): string {
   return 'Perspective Master';
 }
 
+export function resetProgress(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (e) {
+    console.error('Failed to reset progress:', e);
+  }
+}
+
 // Settings functions
 export function getSettings(): UserSettings {
   try {
@@ -226,7 +316,7 @@ export function getDifficulty(): Difficulty {
 export const DIFFICULTY_CONFIG = {
   beginner: {
     label: 'Beginner',
-    description: 'All guides visible, simpler feedback',
+    description: 'Lenient grading, encouraging feedback',
     showGuides: true,
     showVanishingPoints: true,
     showHorizon: true,
@@ -234,7 +324,7 @@ export const DIFFICULTY_CONFIG = {
   },
   intermediate: {
     label: 'Intermediate',
-    description: 'Standard guides, balanced feedback',
+    description: 'Standard grading, balanced feedback',
     showGuides: true,
     showVanishingPoints: true,
     showHorizon: true,
@@ -242,9 +332,9 @@ export const DIFFICULTY_CONFIG = {
   },
   advanced: {
     label: 'Advanced',
-    description: 'Minimal guides, concise feedback',
-    showGuides: false,
-    showVanishingPoints: false,
+    description: 'Strict grading, critical feedback',
+    showGuides: true,
+    showVanishingPoints: true, // Guides are now independent
     showHorizon: true,
     feedbackDetail: 'concise',
   },

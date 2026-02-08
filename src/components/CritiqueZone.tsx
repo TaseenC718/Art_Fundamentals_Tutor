@@ -735,75 +735,10 @@ interface ImageCropperProps {
   onCancel: () => void;
 }
 
-const ScanningOverlay = ({ edgesX, edgesZ }: { edgesX: number[][], edgesZ: number[][] }) => {
-  const [visibleCount, setVisibleCount] = useState(0);
 
-  // Flatten all edges
-  const allEdges = useMemo(() => {
-    return [
-      ...edgesX.map(e => ({ ...e, color: 'cyan' })),
-      ...edgesZ.map(e => ({ ...e, color: 'orange' }))
-    ];
-  }, [edgesX, edgesZ]);
-
-  useEffect(() => {
-    // Reset
-    setVisibleCount(0);
-    const interval = setInterval(() => {
-      setVisibleCount(prev => {
-        // Loop: If we reach end, pause briefly then restart
-        if (prev >= allEdges.length + 20) return 0; // +20 ticks pause
-        return prev + 1;
-      });
-    }, 50); // Speed of edge appearance
-    return () => clearInterval(interval);
-  }, [allEdges]);
-
-  return (
-    <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 1000 1000" preserveAspectRatio="none">
-      {allEdges.slice(0, visibleCount).filter((_, i) => i < allEdges.length).map((edge, i) => (
-        <line
-          key={i}
-          x1={edge[0]} y1={edge[1]}
-          x2={edge[2]} y2={edge[3]}
-          stroke={edge.color}
-          strokeWidth="4"
-          strokeLinecap="round"
-          className="animate-pulse"
-        />
-      ))}
-    </svg>
-  );
-};
 
 // Generic "Laser" scan for User Drawing
-const LaserScanOverlay = () => {
-  return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden rounded">
-      <div className="w-full h-full bg-gradient-to-b from-transparent via-sketch-blue/20 to-transparent"
-        style={{
-          animation: 'scan 2s linear infinite',
-          backgroundSize: '100% 200%',
-        }}>
-      </div>
-      <div className="absolute left-0 right-0 h-1 bg-sketch-blue/50 shadow-[0_0_15px_rgba(59,130,246,0.8)]"
-        style={{ animation: 'scan-line 2s linear infinite' }}>
-      </div>
-      <style>{`
-                @keyframes scan {
-                    0% { transform: translateY(-100%); }
-                    100% { transform: translateY(100%); }
-                }
-                @keyframes scan-line {
-0 % { top: 0 %; opacity: 0; }
-10 % { opacity: 1; }
-90 % { opacity: 1; }
-100 % { top: 100 %; opacity: 0; }
-                }
-`}</style>
-    </div>
-  );
-};
+
 
 const ImageCropper = ({ imageSrc, targetAspectRatio, targetWidth, targetHeight, onConfirm, onCancel }: ImageCropperProps) => {
   const [scale, setScale] = useState(1);
@@ -989,7 +924,7 @@ const StepIndicator: React.FC<StepIndicatorProps> = ({ currentStep }) => {
   const currentIndex = STEP_CONFIG.findIndex(s => s.key === currentStep);
 
   return (
-    <div className="flex items-center justify-center gap-1 md:gap-2 py-3 px-2 bg-paper border-b-2 border-pencil border-dashed">
+    <div className="flex items-center justify-center gap-1 md:gap-2 py-3 px-2 pr-16 bg-paper border-b-2 border-pencil border-dashed">
       {STEP_CONFIG.map((stepInfo, index) => {
         const Icon = stepInfo.icon;
         const isActive = index === currentIndex;
@@ -1050,8 +985,8 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
     height?: number
   }>({ vpLeft: null, vpRight: null, horizonY: null });
 
-  const [showAIVision, setShowAIVision] = useState(true);
-  const [showRefVision, setShowRefVision] = useState(true);
+  const [showGeminiVision, setShowGeminiVision] = useState(true);
+
   const [visibleUserLineCount, setVisibleUserLineCount] = useState(0);
   const [visibleRefLineCount, setVisibleRefLineCount] = useState(0);
 
@@ -1094,7 +1029,7 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   const [loadingStartTime, setLoadingStartTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [analysisError, setAnalysisError] = useState<{ type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string } | null>(null);
-  const [showGeminiVision, setShowGeminiVision] = useState(true);
+
 
   const [loadingMessage, setLoadingMessage] = useState('Analyzing perspective geometry...');
 
@@ -1105,17 +1040,9 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
   const [cameraHeight, setCameraHeight] = useState(0);
 
   const [preset, setPreset] = useState('1pt');
-  const [showGuides, setShowGuides] = useState(() => {
-    const difficulty = getDifficulty();
-    return DIFFICULTY_CONFIG[difficulty].showGuides;
-  });
+  const [showGuides, setShowGuides] = useState<boolean>(true);
 
-  // Update showGuides when difficulty changes
-  useEffect(() => {
-    if (difficultyProp) {
-      setShowGuides(DIFFICULTY_CONFIG[difficultyProp].showGuides);
-    }
-  }, [difficultyProp]);
+
 
   // Loading phase messages
   const LOADING_PHASES = [
@@ -1228,7 +1155,14 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
       setGrade(result.grade);
       setReferenceEdges(result.referenceEdges || []);
       setUserEdges(result.userEdges || []);
-      recordCritique();
+
+      // Save full critique record
+      recordCritique({
+        thumbnail: drawingToUse,
+        grade: result.grade || 'C', // Fallback grade
+        feedback: result.feedback,
+        difficulty: difficultyProp || 'intermediate'
+      });
     } catch (error: any) {
       let errorInfo: { type: 'network' | 'timeout' | 'parse' | 'unknown'; message: string };
 
@@ -1372,17 +1306,19 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
                 </div>
               )}
 
-              <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
-                <span className="text-sm font-bold text-pencil font-hand">Depth</span>
-                <input
-                  type="range"
-                  min="-10"
-                  max="10"
-                  value={cubeDepth}
-                  onChange={(e) => setCubeDepth(Number(e.target.value))}
-                  className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
-                />
-              </div>
+              {preset !== 'free' && (
+                <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
+                  <span className="text-sm font-bold text-pencil font-hand">Depth</span>
+                  <input
+                    type="range"
+                    min="-10"
+                    max="10"
+                    value={cubeDepth}
+                    onChange={(e) => setCubeDepth(Number(e.target.value))}
+                    className="w-16 h-2 bg-pencil rounded-lg appearance-none cursor-pointer accent-sketch-orange"
+                  />
+                </div>
+              )}
 
               <div className="flex items-center gap-2 pr-4 border-r-2 border-pencil">
                 <span className="text-sm font-bold text-pencil font-hand">Lens</span>

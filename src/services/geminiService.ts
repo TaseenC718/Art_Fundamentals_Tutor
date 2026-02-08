@@ -60,11 +60,11 @@ export const sendMessageToGemini = async (
   }
 };
 
-// Critique style based on difficulty
+// Critique style and strictness based on difficulty
 const CRITIQUE_STYLE: Record<Difficulty, string> = {
-  beginner: `Be encouraging and educational. Start by noting what they did well. Explain concepts simply - avoid jargon like "station point" without explanation. Give step-by-step guidance. Use phrases like "A helpful trick is..." or "Try this next time..."`,
-  intermediate: `Balance praise with constructive criticism. Reference perspective principles (vanishing points, convergence) but briefly explain when needed. Be specific about what to fix and how.`,
-  advanced: `Be concise and technical. Skip basic explanations - they know the theory. Focus on subtle errors: slight convergence drift, minor proportion issues, line quality. Challenge them to refine details. Direct and efficient.`
+  beginner: `Be encouraging and educational. Start by noting what they did well. Explain concepts simply. Grading strictness: LENIENT. Allow minor wobbles or slight perspective errors. Focus on the big picture (does it look like a cube?).`,
+  intermediate: `Balance praise with constructive criticism. Reference perspective principles. Grading strictness: STANDARD. Expect correct convergence but allow very minor deviations. Point out specific errors clearly.`,
+  advanced: `Be concise and technical. Skip basic explanations. Grading strictness: STRICT. Deduct points for ANY slight convergence drift, line wobble, or proportion error. Hold them to a professional standard.`
 };
 
 /**
@@ -277,13 +277,20 @@ export const compareDrawings = async (referenceImage: string, userDrawing: strin
       ## Step 2: Extract User Edges (Image 2 - Hand Drawing)
       Identify the drawn edges the same way. Look for the strongest, darkest lines.
 
-      ## Step 3: Compare & Grade
-      Compare how well the user's edges match the reference:
-      - **A** (90-100): Excellent perspective accuracy, lines converge properly
-      - **B** (80-89): Good perspective with minor issues
-      - **C** (70-79): Acceptable but noticeable errors
-      - **D** (60-69): Significant perspective problems
-      - **F** (below 60): Major fundamental errors
+      ## Step 3: Compare & Grade based on Difficulty
+      Current Mode: ${difficulty.toUpperCase()}
+
+      GRADE STRICTNESS GUIDE:
+      - Beginner: Be lenient. If it looks like a cube and converges roughly, give a B or A.
+      - Intermediate: Expect accuracy. Lines must converge to VPs.
+      - Advanced: Zero tolerance for error. Any deviation = lower grade.
+
+      Grading Scale:
+      - **A** (90-100): Meets the strictness level perfectly
+      - **B** (80-89): Good for this level
+      - **C** (70-79): Acceptable for this level
+      - **D** (60-69): Needs improvement
+      - **F** (below 60): Major errors
 
       ## Step 4: Feedback
       ${feedbackStyle}

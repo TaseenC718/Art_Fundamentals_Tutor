@@ -1052,6 +1052,42 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
 
   const [showAIVision, setShowAIVision] = useState(true);
   const [showRefVision, setShowRefVision] = useState(true);
+  const [visibleUserLineCount, setVisibleUserLineCount] = useState(0);
+  const [visibleRefLineCount, setVisibleRefLineCount] = useState(0);
+
+  // Animation for User Lines
+  useEffect(() => {
+    if (showGeminiVision && step === 'result') {
+      const totalUserLines = userEdges.length;
+      let current = 0;
+      setVisibleUserLineCount(0);
+      const interval = setInterval(() => {
+        current += 1;
+        setVisibleUserLineCount(current);
+        if (current >= totalUserLines) clearInterval(interval);
+      }, 50); // Speed of animation (ms)
+      return () => clearInterval(interval);
+    } else {
+      setVisibleUserLineCount(0);
+    }
+  }, [showGeminiVision, userEdges, step]);
+
+  // Animation for Ref Lines
+  useEffect(() => {
+    if (showGeminiVision && step === 'result') {
+      const totalRefLines = referenceEdges.length;
+      let current = 0;
+      setVisibleRefLineCount(0);
+      const interval = setInterval(() => {
+        current += 1;
+        setVisibleRefLineCount(current);
+        if (current >= totalRefLines) clearInterval(interval);
+      }, 50); // Speed of animation (ms)
+      return () => clearInterval(interval);
+    } else {
+      setVisibleRefLineCount(0);
+    }
+  }, [showGeminiVision, referenceEdges, step]);
 
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [loadingPhase, setLoadingPhase] = useState(0);
@@ -1613,7 +1649,7 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
                     className="absolute inset-0 w-full h-full pointer-events-none"
                     preserveAspectRatio="xMidYMid meet"
                   >
-                    {referenceEdges.map((edge, i) => (
+                    {referenceEdges.slice(0, visibleRefLineCount).map((edge, i) => (
                       <line
                         key={`ref-${i}`}
                         x1={edge.start[0]} y1={edge.start[1]}
@@ -1641,7 +1677,7 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
                     className="absolute inset-0 w-full h-full pointer-events-none"
                     preserveAspectRatio="xMidYMid meet"
                   >
-                    {userEdges.map((edge, i) => (
+                    {userEdges.slice(0, visibleUserLineCount).map((edge, i) => (
                       <line
                         key={`user-${i}`}
                         x1={edge.start[0]} y1={edge.start[1]}
@@ -1729,9 +1765,9 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
               )}
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </div >
+      </div >
+    </div >
   );
 };
 

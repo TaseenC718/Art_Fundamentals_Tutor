@@ -9,6 +9,17 @@ import { recordCritique, getDifficulty, DIFFICULTY_CONFIG } from '../services/st
 import { savePhoto } from '../services/photoStorage';
 import Camera from './Camera';
 
+// --- Scanning Overlay Component ---
+const ScanningOverlay = ({ active, colorClass }: { active: boolean, colorClass: string }) => {
+  if (!active) return null;
+  return (
+    <div className="absolute inset-0 z-20 pointer-events-none overflow-hidden rounded-sm">
+      <div className={`w-full h-1 absolute left-0 animate-scan ${colorClass} opacity-100 z-30`} />
+      <div className={`absolute inset-0 bg-gradient-to-b from-transparent via-current to-transparent opacity-10 ${colorClass.replace('bg-', 'text-')} animate-pulse`} />
+    </div>
+  );
+};
+
 // --- Helper Functions for VP Calculation ---
 const HORIZON_Z = -100; // Far distance for horizon line
 
@@ -1458,7 +1469,7 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
                     <Icons.X size={24} />
                   </button>
                 </div>
-                <div className="flex-1 overflow-hidden">
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
                   <Camera
                     selectMode={true}
                     onSelectPhoto={handleArchiveSelect}
@@ -1576,8 +1587,9 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
             {/* Reference Image with Edge Overlay */}
             <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch">
               <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Reference Model</p>
-              <div className="relative w-full h-48 md:h-56">
+              <div className="relative w-full h-48 md:h-56 bg-white flex items-center justify-center overflow-hidden">
                 <img src={referenceImage!} className="w-full h-full object-contain" alt="ref" />
+                <ScanningOverlay active={isAnalyzing} colorClass="bg-sketch-blue shadow-scan-blue" />
                 {/* Reference Edge Overlay */}
                 {showGeminiVision && referenceEdges.length > 0 && (
                   <svg
@@ -1604,8 +1616,9 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
             {/* User Drawing with Edge Overlay */}
             <div className="bg-white p-3 rounded-sm border-2 border-pencil shadow-sketch">
               <p className="text-xs font-bold font-hand text-pencil mb-2 uppercase tracking-wide text-center">Your Drawing</p>
-              <div className="relative w-full h-48 md:h-56">
+              <div className="relative w-full h-48 md:h-56 bg-white flex items-center justify-center overflow-hidden">
                 <img src={userDrawing!} className="w-full h-full object-contain" alt="user" />
+                <ScanningOverlay active={isAnalyzing} colorClass="bg-sketch-orange shadow-scan" />
                 {/* User Edge Overlay */}
                 {showGeminiVision && userEdges.length > 0 && (
                   <svg
@@ -1677,7 +1690,9 @@ const CritiqueZone: React.FC<CritiqueZoneProps> = ({ difficulty: difficultyProp 
                       </div>
                     </div>
                   )}
-                  <MarkdownRenderer content={analysis || "No analysis available."} className="font-hand text-lg" />
+                  <div className="max-h-[50vh] md:max-h-none overflow-y-auto pr-2 custom-scrollbar">
+                    <MarkdownRenderer content={analysis || "No analysis available."} className="font-hand text-lg" />
+                  </div>
 
                   {/* Technical Details Section */}
                   <details className="mt-4 border-t-2 border-pencil/20 pt-2">

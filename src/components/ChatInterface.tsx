@@ -94,8 +94,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ initialMessage }) => {
           >
             <div
               className={`max-w-[85%] md:max-w-[70%] rounded-sm p-4 shadow-sketch border-2 border-pencil ${msg.role === 'user'
-                  ? 'bg-sketch-blue text-pencil rounded-br-none transform rotate-1'
-                  : 'bg-white text-pencil rounded-bl-none transform -rotate-1'
+                ? 'bg-sketch-blue text-pencil rounded-br-none transform rotate-1'
+                : 'bg-white text-pencil rounded-bl-none transform -rotate-1'
                 }`}
             >
               {msg.role === 'user' ? (
@@ -134,8 +134,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ initialMessage }) => {
             onClick={handleSend}
             disabled={!input.trim() || isLoading}
             className={`p-2.5 rounded-sm mb-0.5 transition-all border-2 ${!input.trim() || isLoading
-                ? 'bg-paper text-pencil/30 border-pencil/30 cursor-not-allowed'
-                : 'bg-sketch-orange text-pencil border-pencil hover:bg-sketch-yellow shadow-sm hover:-translate-y-0.5'
+              ? 'bg-paper text-pencil/30 border-pencil/30 cursor-not-allowed'
+              : 'bg-sketch-orange text-pencil border-pencil hover:bg-sketch-yellow shadow-sm hover:-translate-y-0.5'
               }`}
           >
             {isLoading ? <Icons.Loader /> : <Icons.Send />}

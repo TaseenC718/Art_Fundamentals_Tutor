@@ -64,28 +64,30 @@ const CritiqueModal = ({ record, onClose }: { record: CritiqueRecord; onClose: (
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
-          {/* Left Col: Image */}
-          <div className="space-y-4">
-            <div className="aspect-square md:aspect-[4/3] w-full rounded-lg border-2 border-pencil shadow-sketch bg-white p-2">
-              <img src={record.thumbnail} alt="Full drawing" className="w-full h-full object-contain" />
-            </div>
-            <div className="flex justify-center">
-              <div className="inline-flex flex-col items-center bg-white px-8 py-4 rounded-lg border-2 border-pencil shadow-sm transform -rotate-1">
-                <span className="text-sm font-bold text-pencil/50 uppercase tracking-widest mb-1">Grade</span>
-                <span className={`text-6xl font-heading ${record.grade.startsWith('A') ? 'text-green-500' :
-                  record.grade.startsWith('B') ? 'text-blue-500' :
-                    record.grade.startsWith('C') ? 'text-yellow-500' : 'text-red-500'
-                  }`}>{record.grade}</span>
+        <div className="flex-1 overflow-y-auto custom-scrollbar">
+          <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-8">
+            {/* Left Col: Image */}
+            <div className="space-y-4">
+              <div className="aspect-square md:aspect-[4/3] w-full rounded-lg border-2 border-pencil shadow-sketch bg-white p-2">
+                <img src={record.thumbnail} alt="Full drawing" className="w-full h-full object-contain" />
+              </div>
+              <div className="flex justify-center">
+                <div className="inline-flex flex-col items-center bg-white px-8 py-4 rounded-lg border-2 border-pencil shadow-sm transform -rotate-1">
+                  <span className="text-sm font-bold text-pencil/50 uppercase tracking-widest mb-1">Grade</span>
+                  <span className={`text-6xl font-heading ${record.grade.startsWith('A') ? 'text-green-500' :
+                    record.grade.startsWith('B') ? 'text-blue-500' :
+                      record.grade.startsWith('C') ? 'text-yellow-500' : 'text-red-500'
+                    }`}>{record.grade}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Right Col: Feedback */}
-          <div className="bg-white rounded-lg border-2 border-pencil p-6 shadow-sm overflow-y-auto">
-            <h3 className="font-heading text-xl text-pencil mb-4 border-b-2 border-pencil/20 pb-2">Feedback</h3>
-            <div className="prose prose-pencil font-hand">
-              <MarkdownRenderer content={record.feedback} />
+            {/* Right Col: Feedback */}
+            <div className="bg-white rounded-lg border-2 border-pencil p-6 shadow-sm overflow-visible md:overflow-y-auto">
+              <h3 className="font-heading text-xl text-pencil mb-4 border-b-2 border-pencil/20 pb-2">Feedback</h3>
+              <div className="prose prose-pencil font-hand">
+                <MarkdownRenderer content={record.feedback} />
+              </div>
             </div>
           </div>
         </div>
